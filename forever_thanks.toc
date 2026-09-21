@@ -1,0 +1,8 @@
+## Interface: 16001
+## Title: forever_thanks
+## Notes: Friendly thank-you whispers for player buffs lasting longer than two minutes. Forever beta.
+## Author: Sinestro
+## Version: 0.1.0-beta.1
+## SavedVariables: ForeverThanksDB
+
+forever_thanks.lua
