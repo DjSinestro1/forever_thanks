@@ -48,11 +48,17 @@ local function harness(saved)
     function h:event(event, arg) self.handler(nil, event, arg) end
     function h:cmd(command) env.SlashCmdList.FOREVERTHANKS(command) end
     function h:advance(seconds)
-        self.now = self.now + seconds
-        local tasks = self.tasks; self.tasks = {}
-        for _, item in ipairs(tasks) do
-            if item[1] <= self.now then item[2]() else self.tasks[#self.tasks + 1] = item end
+        local finish = self.now + seconds
+        while true do
+            local nextIndex
+            for i, item in ipairs(self.tasks) do
+                if item[1] <= finish and (not nextIndex or item[1] < self.tasks[nextIndex][1]) then nextIndex = i end
+            end
+            if not nextIndex then break end
+            local item = table.remove(self.tasks, nextIndex)
+            self.now = item[1]; item[2]()
         end
+        self.now = finish
     end
     function h:add(id, duration, guid, name)
         local aura = {auraInstanceID = id, duration = duration, expirationTime = self.now + duration,
@@ -65,7 +71,7 @@ local function harness(saved)
     h.env = env
     return h
 end
-local function active(saved) local h = harness(saved); h:event("PLAYER_ENTERING_WORLD"); return h end
+local function active(saved) local h = harness(saved); h:event("PLAYER_ENTERING_WORLD"); h:advance(6); return h end
 
 test("nil sourceUnit resolves caster and delayed realm-qualified whisper", function()
     local h = active({channel = "WHISPER"}); h:add(1, 3600); h:change(); eq(#h.sent, 0)
@@ -246,6 +252,73 @@ test("nil emote restriction flag is not reported as blocked", function()
     h:add(1, 3600); h:change(); h:advance(1); h:cmd("status")
     eq(#h.emotes, 1); assert(table.concat(h.output):find("send errors=0", 1, true))
 end)
+for _, mode in ipairs({"EMOTE", "WHISPER"}) do
+    local function replies(h) return #h.sent + #h.emotes end
+    test(mode .. ": restored login buffs arrive in batches silently, then new buffs work", function()
+        local h = harness({channel = mode}); h:event("PLAYER_ENTERING_WORLD")
+        h:advance(0.5); h:add(1, 3600).expirationTime = h.now + 1800; h:change()
+        h:advance(2); h:add(2, 3600).expirationTime = h.now + 1700; h:change()
+        h:advance(4); eq(replies(h), 0)
+        h:add(3, 3600); h:change(); h:advance(1); eq(replies(h), 1)
+    end)
+    test(mode .. ": portal restores changed aura IDs without thanks, refresh later works", function()
+        local h = active({channel = mode}); h:add(1, 3600); h:change(); h:advance(1)
+        h:advance(61); h:event("PLAYER_LEAVING_WORLD"); h.auras = {}
+        h:event("PLAYER_ENTERING_WORLD"); h:advance(1)
+        local old = h:add(99, 3600); old.expirationTime = h.now + 1800; h:change()
+        h:advance(6); eq(replies(h), 1)
+        old.expirationTime = h.now + 3600; h:change(); h:advance(1); eq(replies(h), 2)
+    end)
+    test(mode .. ": late old buff beyond settling deadline is skipped, new buff works", function()
+        local h = active({channel = mode}); h:advance(20)
+        local old = h:add(1, 3600); old.expirationTime = h.now + 1800
+        h:change(); h:advance(1); eq(replies(h), 0)
+        h:add(2, 3600); h:change(); h:advance(1); eq(replies(h), 1)
+    end)
+    test(mode .. ": full-duration buff during settling is baselined, not sent later", function()
+        local h = harness({channel = mode}); h:event("PLAYER_ENTERING_WORLD"); h:advance(1)
+        h:add(1, 3600); h:change(); h:advance(6); h:change(); h:advance(1)
+        eq(replies(h), 0)
+    end)
+    test(mode .. ": updates near deadline extend settling until quiet", function()
+        local h = harness({channel = mode}); h:event("PLAYER_ENTERING_WORLD")
+        h:advance(4.8); h:add(1, 3600); h:change(); h:advance(0.5)
+        h:add(2, 3600); h:change(); h:advance(0.9); h:cmd("status")
+        assert(h.output[#h.output - 4]:find("settling", 1, true))
+        h:advance(1); eq(replies(h), 0)
+        h:add(3, 3600); h:change(); h:advance(1); eq(replies(h), 1)
+    end)
+    test(mode .. ": final snapshot catches restoration without an aura event", function()
+        local h = harness({channel = mode}); h:event("PLAYER_ENTERING_WORLD"); h:advance(4)
+        h:add(1, 3600); h:advance(2); h:change(); h:advance(1); eq(replies(h), 0)
+    end)
+    test(mode .. ": rapid transfers invalidate old timers and suppress between-world events", function()
+        local h = harness({channel = mode}); h:event("PLAYER_ENTERING_WORLD"); h:advance(4)
+        h:event("PLAYER_LEAVING_WORLD"); h:add(1, 3600); h:change(); h:advance(4)
+        eq(replies(h), 0)
+        h:event("PLAYER_ENTERING_WORLD"); h:advance(2); h:add(2, 3600); h:change()
+        h:advance(4); eq(replies(h), 0)
+        h:add(3, 3600); h:change(); h:advance(1); eq(replies(h), 1)
+    end)
+    test(mode .. ": settings changes do not cancel settling or enable early replies", function()
+        local h = harness({channel = mode}); h:event("PLAYER_ENTERING_WORLD"); h:advance(1)
+        h:cmd("off"); h:cmd("on"); h:cmd("groups on")
+        h:cmd("mode " .. (mode == "EMOTE" and "whisper" or "emote")); h:cmd("mode " .. mode:lower())
+        h:add(1, 3600); h:change(); h:advance(5); eq(replies(h), 0)
+        h:add(2, 3600); h:change(); h:advance(1); eq(replies(h), 1)
+    end)
+    test(mode .. ": combat or unreadable data during settling cannot replay old buffs", function()
+        for _, kind in ipairs({"combat", "restricted"}) do
+            local h = harness({channel = mode}); h:event("PLAYER_ENTERING_WORLD")
+            if kind == "combat" then h.combat = true; h:event("PLAYER_REGEN_DISABLED") else h.readError = true end
+            h:add(1, 3600); h:change(); h:advance(6)
+            h.combat = false; h.readError = false
+            if kind == "combat" then h:event("PLAYER_REGEN_ENABLED") else h:change() end
+            h:advance(1); eq(replies(h), 0)
+            h:add(2, 3600); h:change(); h:advance(1); eq(replies(h), 1)
+        end
+    end)
+end
 for _, item in ipairs(tests) do
     item[2](); passed = passed + 1; print("PASS " .. item[1])
 end

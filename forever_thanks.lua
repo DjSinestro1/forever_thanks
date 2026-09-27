@@ -1,5 +1,6 @@
 local addonName = ...
-local VERSION = "0.1.0-beta.7"
+local VERSION = "0.1.0-beta.8"
+local LOAD_SETTLE_SECONDS, AURA_QUIET_SECONDS, MAX_APPLICATION_AGE = 5, 1, 5
 local messages = {
     "Ayyy, that is nice! Appreciate you and your buffs!",
     "Much appreciated! You are a buffing legend.",
@@ -35,6 +36,7 @@ local db, seen, ready = nil, {}, false
 local pending, lastSent = {}, {}
 local generation, lastMessage, lastAttempt = 0, nil, -math.huge
 local sent, failures, restricted = 0, 0, 0
+local inWorld, settling, worldGeneration, lastAuraUpdate = false, true, 0, 0
 
 local function Say(text)
     print("|cff66ddffforever_thanks:|r " .. text)
@@ -100,7 +102,8 @@ local function Queue(guid, spell)
     C_Timer.After(1, function()
         if ticket ~= generation then return end
         pending[guid] = nil
-        if not db.enabled or InCombatLockdown() or (not db.groups and IsInGroup()) then return end
+        if not inWorld or settling or not ready or not db.enabled
+            or InCombatLockdown() or (not db.groups and IsInGroup()) then return end
         local time = GetTime()
         -- Cap bursts from multiple players as well as repeated buffs from one player.
         if time - lastAttempt < 3 then return end
@@ -119,10 +122,12 @@ end
 
 local function Scan(baseline)
     if not db or not Available() then return end
+    if not inWorld then ready = false; return end
     if InCombatLockdown() then ready = false; return end
     local mine = UnitGUID("player")
     if not Readable(mine) or type(mine) ~= "string" then ready = false; return end
     local current, candidates = {}, {}
+    local now = GetTime()
     for index = 1, 255 do
         local ok, aura = pcall(C_UnitAuras.GetAuraDataByIndex, "player", index, "HELPFUL")
         if not ok or not Readable(aura) then
@@ -136,8 +141,12 @@ local function Scan(baseline)
         if type(id) == "number" then
             current[id] = type(expires) == "number" and expires or 0
             local fresh = seen[id] == nil or current[id] > seen[id] + 1
-            if ready and not baseline and db.enabled and fresh
+            -- Old auras can arrive even after the loading baseline. Their
+            -- remaining lifetime is shorter than a newly applied/refreshed buff.
+            local age = type(duration) == "number" and now - (current[id] - duration) or math.huge
+            if ready and not settling and not baseline and db.enabled and fresh
                 and type(duration) == "number" and duration > 120
+                and current[id] > now and age >= -1 and age <= MAX_APPLICATION_AGE
                 and (db.groups or not IsInGroup()) then
                 local got, guid = pcall(C_UnitAuras.GetAuraCasterGUID, "player", id)
                 if got and Readable(guid) and type(guid) == "string"
@@ -149,7 +158,7 @@ local function Scan(baseline)
             end
         end
     end
-    seen, ready = current, true
+    seen, ready = current, not settling
     for _, candidate in ipairs(candidates) do Queue(candidate[1], candidate[2]) end
     for guid, time in pairs(lastSent) do
         if GetTime() - time > db.cooldown then lastSent[guid] = nil end
@@ -160,6 +169,25 @@ local function Baseline()
     ready = false
     CancelPending()
     Scan(true)
+end
+
+local function EnterWorld()
+    inWorld, settling = true, true
+    worldGeneration = worldGeneration + 1
+    local ticket, earliest = worldGeneration, GetTime() + LOAD_SETTLE_SECONDS
+    lastAuraUpdate = GetTime()
+    Baseline()
+    local function FinishBaseline()
+        if ticket ~= worldGeneration or not inWorld then return end
+        local wait = math.max(earliest, lastAuraUpdate + AURA_QUIET_SECONDS) - GetTime()
+        if wait > 0 then C_Timer.After(wait, FinishBaseline); return end
+        settling = false
+        -- Take one final silent snapshot, including auras with no UNIT_AURA yet.
+        Baseline()
+    end
+    if C_Timer and type(C_Timer.After) == "function" then
+        C_Timer.After(LOAD_SETTLE_SECONDS, FinishBaseline)
+    end
 end
 
 frame:SetScript("OnEvent", function(_, event, arg)
@@ -175,12 +203,20 @@ frame:SetScript("OnEvent", function(_, event, arg)
         if type(db.message) ~= "string" or db.message == "" or #db.message > 200 then db.message = nil end
         if not Available() then Say("Required Forever APIs are missing; automatic thanks is inactive.") end
         Say(VERSION .. " loaded. /ft status or /ft help.")
-    elseif event == "PLAYER_ENTERING_WORLD" or event == "PLAYER_REGEN_ENABLED" then
+    elseif event == "PLAYER_ENTERING_WORLD" then
+        EnterWorld()
+    elseif event == "PLAYER_REGEN_ENABLED" then
         Baseline()
-    elseif event == "PLAYER_LEAVING_WORLD" or event == "PLAYER_REGEN_DISABLED" then
+    elseif event == "PLAYER_LEAVING_WORLD" then
+        inWorld, settling, ready = false, true, false
+        worldGeneration = worldGeneration + 1
+        CancelPending()
+    elseif event == "PLAYER_REGEN_DISABLED" then
         ready = false
         CancelPending()
     elseif event == "UNIT_AURA" and Readable(arg) and arg == "player" then
+        if not inWorld then return end
+        lastAuraUpdate = GetTime()
         Scan(false)
     end
 end)
@@ -226,10 +262,11 @@ SlashCmdList.FOREVERTHANKS = function(input)
     elseif cmd == "status" or cmd == "" then
         Say(VERSION .. "; " .. (db.enabled and "enabled" or "disabled")
             .. "; APIs " .. (Available() and "available" or "missing")
-            .. "; " .. (ready and "watching" or "waiting for safe baseline") .. ".")
+            .. "; " .. (settling and "settling after loading" or (ready and "watching" or "waiting for safe baseline")) .. ".")
         Say("Buff duration >120s; cooldown " .. db.cooldown .. "s; groups " .. (db.groups and "on" or "off") .. ".")
         Say("Channel: " .. db.channel:lower() .. ". This login: chat requests=" .. sent .. ", send errors=" .. failures .. ", restricted scans=" .. restricted .. ".")
         Say("Out of combat only. Existing buffs on login/zoning/combat exit are ignored.")
+        Say("After loading: 5s minimum, then 1s without aura updates. Applications older than 5s are skipped.")
     else
         Say("/ft on | off | status | preview | debug")
         Say("/ft mode whisper | emote (default: whisper)")

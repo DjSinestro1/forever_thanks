@@ -1,3 +1,13 @@
+# 0.1.0-beta.8
+
+- Fixes false thanks when existing buffs arrive late after login, reload, portals, or instance/zone transfers.
+- Adds a five-second minimum silent settling period, extended until player-aura updates are quiet for one second, followed by a final silent snapshot.
+- Ignores aura updates between leaving and entering the world, cancels pending replies, and invalidates stale loading timers during rapid transfers.
+- Skips old buffs arriving even after settling by checking remaining duration against the full buff duration. Only applications/refreshed buffs reported within five seconds qualify.
+- Applies to both whispers and emotes; keeps whisper as the default and preserves saved preferences.
+- A real buff received during settling or reported unusually late may intentionally receive no thanks. Status reports the settling phase.
+- Adds regression coverage for delayed/batched restoration, aura-ID changes, rapid transfers, settings changes, unreadable data, combat, and later genuine buffs. In-game verification of this fix is still needed.
+
 # 0.1.0-beta.7
 
 - Fixes targeted emotes by using the buff caster's plain character name, preserving spaces; whispers still use Name-Realm.
