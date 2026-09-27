@@ -12,6 +12,8 @@ local function harness(saved)
     end
     env.GetTime = function() return h.now end
     env.InCombatLockdown = function() return h.combat end
+    env.IsInInstance = function() return not h.outdoors end
+    env.ChatFrameUtil = {OpenChat = function(text) h.draft = text end}
     env.IsInGroup = function() return h.grouped end
     env.UnitGUID = function() return "Player-Self" end
     env.UnitNameFromGUID = function(guid)
@@ -57,7 +59,7 @@ end
 local function active(saved) local h = harness(saved); h:event("PLAYER_ENTERING_WORLD"); return h end
 
 test("nil sourceUnit resolves caster and delayed realm-qualified whisper", function()
-    local h = active(); h:add(1, 3600); h:change(); eq(#h.sent, 0)
+    local h = active({channel = "WHISPER"}); h:add(1, 3600); h:change(); eq(#h.sent, 0)
     h:advance(1); eq(#h.sent, 1); eq(h.sent[1].recipient, "BuffFriend-Realm"); eq(h.sent[1].channel, "WHISPER")
 end)
 test("strict two-minute boundary; short, permanent, missing duration ignored", function()
@@ -130,6 +132,46 @@ end)
 test("send error handled without retry storm", function()
     local h = active(); h.sendError = true; h:add(1, 3600); h:change(); h:advance(1); h:change(); h:advance(1)
     eq(#h.sent, 0); h:cmd("status"); assert(table.concat(h.output):find("send errors=1", 1, true))
+end)
+test("new and upgraded settings default to SAY without recipient", function()
+    for _, saved in ipairs({{}, {enabled = true, message = "Thanks!"}, {channel = "RAID"}}) do
+        local h = active(saved); h:add(1, 3600); h:change(); h:advance(1)
+        eq(h.env.ForeverThanksDB.channel, "SAY"); eq(h.sent[1].channel, "SAY"); eq(h.sent[1].recipient, nil)
+    end
+end)
+test("channel command switches both ways, persists, and rejects invalid channels", function()
+    local h = active(); h:cmd("channel whisper"); eq(h.env.ForeverThanksDB.channel, "WHISPER")
+    h:cmd("channel raid"); eq(h.env.ForeverThanksDB.channel, "WHISPER")
+    local reloaded = active(h.env.ForeverThanksDB)
+    reloaded:add(1, 3600); reloaded:change(); reloaded:advance(1); eq(reloaded.sent[1].channel, "WHISPER")
+    h:cmd("channel SaY"); h:add(1, 3600); h:change(); h:advance(1)
+    eq(h.sent[1].channel, "SAY"); eq(h.sent[1].recipient, nil)
+end)
+test("channel change during delay uses latest choice without bypassing cooldown", function()
+    local h = active(); h:add(1, 3600); h:change(); h:cmd("channel whisper"); h:advance(1)
+    eq(h.sent[1].channel, "WHISPER"); h:cmd("channel say"); h:add(2, 3600); h:change(); h:advance(1); eq(#h.sent, 1)
+end)
+test("28 unique replies with no consecutive random repeat", function()
+    local h = active(); local replies, previous = {}, nil
+    for i = 1, 400 do
+        h:advance(61); h.auras = {}; h:change(); h:add(i, 3600); h:change(); h:advance(1)
+        local text = h.sent[#h.sent].text
+        assert(text ~= previous); previous = text; replies[text] = true
+    end
+    local count = 0; for _ in pairs(replies) do count = count + 1 end; eq(count, 28)
+end)
+test("outdoor SAY is a manual draft; whispers remain automatic", function()
+    local h = active(); h.outdoors = true; h:add(1, 3600); h:change(); h:advance(1)
+    eq(#h.sent, 0); eq(h.draft, nil); h:cmd("send"); eq(h.draft, nil); h:advance(0); assert(h.draft:find("/say ", 1, true) == 1)
+    h.draft = nil; h:cmd("send"); eq(h.draft, nil)
+    h = active({channel = "WHISPER"}); h.outdoors = true; h:add(1, 3600); h:change(); h:advance(1); eq(#h.sent, 1)
+end)
+test("outdoor drafts expire and cancel on disable or channel change", function()
+    for _, action in ipairs({"off", "channel whisper", "expire"}) do
+        local h = active(); h.outdoors = true; h:add(1, 3600); h:change(); h:advance(1)
+        if action == "expire" then h:advance(31) else h:cmd(action) end
+        h:cmd("send"); eq(h.draft, nil); eq(#h.sent, 0)
+    end
 end)
 for _, item in ipairs(tests) do
     item[2](); passed = passed + 1; print("PASS " .. item[1])

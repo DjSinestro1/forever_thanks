@@ -1,5 +1,5 @@
 local addonName = ...
-local VERSION = "0.1.0-beta.1"
+local VERSION = "0.1.0-beta.3"
 local messages = {
     "Ayyy, that is nice! Appreciate you and your buffs!",
     "Much appreciated! You are a buffing legend.",
@@ -9,8 +9,29 @@ local messages = {
     "Thank you kindly for the buff!",
     "You are awesome - thanks for the buff!",
     "Ayyy, appreciate the buffs! You rock.",
+    "That buff is the bee's knees! Cheers, mate!",
+    "You're a diamond geezer - cheers for the buff!",
+    "That buff's proper mint. Nice one!",
+    "Cheers, my china plate! Lovely buff.",
+    "That's a bit of all right! Ta for the buff!",
+    "Respect, fam - appreciate the buff!",
+    "Big up yourself! Thanks for looking out.",
+    "That buff's fire, no cap. Appreciate you!",
+    "You're a real one. Thanks for the buff!",
+    "Buff game on point! Much love!",
+    "Now we're cooking! Thanks for the sweet buff!",
+    "That's smooth, cool cat. Thanks for the buff!",
+    "Right on! That buff's got me grooving.",
+    "Groovy stuff! Appreciate the magical hookup!",
+    "Cheers, legend! That buff's a beaut.",
+    "Good on ya, mate! Thanks for the buff!",
+    "Sweet as! Chur for the buff!",
+    "Shot, bru! That's a lekker buff!",
+    "That's class! Cheers a million for the buff!",
+    "Beauty, eh? Thanks a bunch for the buff!",
 }
 local frame = CreateFrame("Frame")
+local sayDraft
 local db, seen, ready = nil, {}, false
 local pending, lastSent = {}, {}
 local generation, lastMessage, lastAttempt = 0, nil, -math.huge
@@ -33,10 +54,36 @@ local function Available()
 end
 
 local function CancelPending()
+    sayDraft = nil
     generation = generation + 1
     pending = {}
 end
 
+local function PrepareSay(text)
+    if db.channel ~= "SAY" or (IsInInstance and IsInInstance()) then return false end
+    sayDraft = {text = text, expires = GetTime() + 30}
+    Say("Thanks ready. Type /ft send, then press Enter to say it (expires in 30s).")
+    return true
+end
+local function OpenSay()
+    if not sayDraft or GetTime() > sayDraft.expires then
+        sayDraft = nil; Say("No recent thanks waiting."); return
+    end
+    if not db.enabled or db.channel ~= "SAY" or (InCombatLockdown and InCombatLockdown()) then
+        Say("Cannot prepare say right now. Leave combat and keep channel set to say."); return
+    end
+    local open = ChatFrameUtil and ChatFrameUtil.OpenChat or ChatFrame_OpenChat
+    if not open then Say("Chat editor unavailable."); return end
+    local draft = sayDraft
+    -- Slash-command processing clears the editor on return. Open next frame.
+    -- This only prepares text; the player must still press Enter to send.
+    C_Timer.After(0, function()
+        if sayDraft ~= draft or not db.enabled or db.channel ~= "SAY"
+            or GetTime() > draft.expires or (InCombatLockdown and InCombatLockdown()) then return end
+        local ok = pcall(open, "/say " .. draft.text)
+        if ok then sayDraft = nil else Say("Chat editor blocked by client.") end
+    end)
+end
 local function Message(spell)
     if db.message then
         return (db.message:gsub("%%s", function() return spell end))
@@ -67,13 +114,15 @@ local function Queue(guid, spell)
         local text = Message(spell)
         if #text > 255 then Say("Message too long; use /ft message with shorter text."); return end
         lastAttempt, lastSent[guid] = time, time
-        local success = pcall(C_ChatInfo.SendChatMessage, text, "WHISPER", nil, name)
+        if PrepareSay(text) then return end
+        local target = db.channel == "WHISPER" and name or nil
+        local success = pcall(C_ChatInfo.SendChatMessage, text, db.channel, nil, target)
         if success then
             sent = sent + 1
-            if db.debug then Say("Whisper requested for " .. name .. " (" .. spell .. ").") end
+            if db.debug then Say(db.channel .. " requested for " .. name .. " (" .. spell .. ").") end
         else
             failures = failures + 1
-            Say("Whisper blocked by the client. /ft status shows diagnostics.")
+            Say(db.channel .. " blocked by the client. /ft status shows diagnostics.")
         end
     end)
 end
@@ -128,6 +177,7 @@ frame:SetScript("OnEvent", function(_, event, arg)
         if type(ForeverThanksDB) ~= "table" then ForeverThanksDB = {} end
         db = ForeverThanksDB
         if type(db.enabled) ~= "boolean" then db.enabled = true end
+        if db.channel ~= "SAY" and db.channel ~= "WHISPER" then db.channel = "SAY" end
         if type(db.groups) ~= "boolean" then db.groups = true end
         if type(db.cooldown) ~= "number" or db.cooldown ~= db.cooldown then db.cooldown = 60 end
         db.cooldown = math.max(30, math.min(3600, db.cooldown))
@@ -155,9 +205,15 @@ SlashCmdList.FOREVERTHANKS = function(input)
     if not db then return end
     local cmd, rest = input:match("^%s*(%S*)%s*(.-)%s*$")
     cmd = cmd:lower()
-    if cmd == "on" or cmd == "off" then
+    if cmd == "send" then OpenSay()
+    elseif cmd == "on" or cmd == "off" then
         db.enabled = cmd == "on"; Baseline()
         Say(db.enabled and "Enabled." or "Disabled.")
+    elseif cmd == "channel" then
+        local channel = rest:upper()
+        if channel == "SAY" or channel == "WHISPER" then
+            db.channel = channel; sayDraft = nil; Say("Thank-you channel: " .. channel:lower() .. ".")
+        else Say("Use /ft channel say | whisper") end
     elseif cmd == "groups" and (rest == "on" or rest == "off") then
         db.groups = rest == "on"; Baseline()
         Say("Thanks while grouped: " .. (db.groups and "on" or "off"))
@@ -167,7 +223,7 @@ SlashCmdList.FOREVERTHANKS = function(input)
             db.cooldown = math.floor(seconds); Say("Per-player cooldown: " .. db.cooldown .. "s.")
         else Say("Use /ft cooldown 30-3600 (default 60 seconds).") end
     elseif cmd == "message" then
-        if rest == "random" or rest == "default" then db.message = nil; Say("Eight rotating messages enabled.")
+        if rest == "random" or rest == "default" then db.message = nil; Say("28 rotating messages enabled.")
         elseif rest ~= "" and #rest <= 200 and not rest:find("[\r\n|]") then
             db.message = rest; Say("Custom message saved. %s inserts the buff name.")
         else Say("Use /ft message <text, up to 200 bytes> or /ft message random.") end
@@ -180,10 +236,12 @@ SlashCmdList.FOREVERTHANKS = function(input)
             .. "; APIs " .. (Available() and "available" or "missing")
             .. "; " .. (ready and "watching" or "waiting for safe baseline") .. ".")
         Say("Buff duration >120s; cooldown " .. db.cooldown .. "s; groups " .. (db.groups and "on" or "off") .. ".")
-        Say("This login: whisper requests=" .. sent .. ", send errors=" .. failures .. ", restricted scans=" .. restricted .. ".")
+        Say("Channel: " .. db.channel:lower() .. ". This login: chat requests=" .. sent .. ", send errors=" .. failures .. ", restricted scans=" .. restricted .. ".")
         Say("Out of combat only. Existing buffs on login/zoning/combat exit are ignored.")
     else
         Say("/ft on | off | status | preview | debug")
+        Say("/ft send - open a pending outdoor say reply; press Enter to send.")
+        Say("/ft channel say | whisper (default: say)")
         Say("/ft groups on|off ; /ft cooldown 60 ; /ft message <text>|random")
     end
 end
