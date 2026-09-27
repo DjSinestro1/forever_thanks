@@ -1,8 +1,8 @@
 ## Interface: 16001
 ## Title: forever_thanks
-## Notes: Friendly thank-you messages in say or whisper for buffs over two minutes. Forever beta.
+## Notes: Automatic thank-you whispers for buffs over two minutes. Forever beta.
 ## Author: Sinestro
-## Version: 0.1.0-beta.4
+## Version: 0.1.0-beta.5
 ## SavedVariables: ForeverThanksDB
 
 forever_thanks.lua

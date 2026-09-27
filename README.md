@@ -2,9 +2,9 @@
 
 Friendly automatic buff thank-yous for **World of Warcraft: Forever beta 1.60.1**, by Sinestro.
 
-This build **attempts automatic SAY everywhere, including outdoors**, so its behavior can be tested on the Forever client. There is no manual draft or send step. Whether the beta permits outdoor say has not yet been verified in-game. If the client rejects a send, the addon reports the error without retrying the same buff repeatedly.
+This build sends **automatic private whispers** to players who buff you. There is no manual draft or send step. If the client rejects a send, the addon reports the error without retrying the same buff repeatedly.
 
-Use `/ft channel whisper` for automatic private thanks, or `/ft channel say` for the automatic say test. New settings default to say; explicit saved channel choices remain saved.
+Automatic say did not work in the user's Forever test. This version restores whispers and automatically migrates saved SAY settings on load. Other preferences are preserved.
 
 ## Features
 
@@ -20,7 +20,6 @@ Use `/ft channel whisper` for automatic private thanks, or `/ft channel say` for
 Extract `forever_thanks` into your Forever client's `Interface/AddOns` directory. Restart the client if adding it for the first time, or use `/reload` after updating. Disable any other auto-thanks addon to avoid duplicate replies.
 
 - `/ft status` - selected channel and diagnostics.
-- `/ft channel say` / `/ft channel whisper` - choose the automatic chat channel.
 - `/ft on` / `/ft off` - enable or disable.
 - `/ft preview` - local preview only.
 - `/ft groups on|off` - thanks while grouped (default on).
@@ -31,11 +30,11 @@ Extract `forever_thanks` into your Forever client's `Interface/AddOns` directory
 
 `/foreverthanks` and `/forever_thanks` are aliases.
 
-## Test automatic say
+## Test automatic whispers
 
-Run `/reload`, `/ft channel say`, and `/ft debug`. While out of combat outdoors, have another player give you a buff longer than two minutes. Wait one second and check for a real say message. If nothing appears, run `/ft status` and report the output plus any game error. Counters show API requests, not confirmed delivery.
+Run `/reload` and optionally `/ft debug`. While out of combat, have another player give you a buff longer than two minutes. Wait one second and check for an outgoing whisper. If nothing appears, run `/ft status` and report the output plus any game error. Counters show API requests, not confirmed delivery.
 
-Caster lookup and delayed whisper were previously tested on Forever 1.60.1. Automatic outdoor say is experimental until the in-game test succeeds. The addon does not bypass client restrictions.
+Caster lookup and delayed whisper were previously tested on Forever 1.60.1. The addon does not bypass client restrictions.
 
 Run `lua5.1 tests/test.lua` from the repository root for mocked tests. `build.ps1` creates the installable ZIP.
 

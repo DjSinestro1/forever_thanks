@@ -1,5 +1,5 @@
 local addonName = ...
-local VERSION = "0.1.0-beta.4"
+local VERSION = "0.1.0-beta.5"
 local messages = {
     "Ayyy, that is nice! Appreciate you and your buffs!",
     "Much appreciated! You are a buffing legend.",
@@ -87,8 +87,7 @@ local function Queue(guid, spell)
         local text = Message(spell)
         if #text > 255 then Say("Message too long; use /ft message with shorter text."); return end
         lastAttempt, lastSent[guid] = time, time
-        local target = db.channel == "WHISPER" and name or nil
-        local success = pcall(C_ChatInfo.SendChatMessage, text, db.channel, nil, target)
+        local success = pcall(C_ChatInfo.SendChatMessage, text, "WHISPER", nil, name)
         if success then
             sent = sent + 1
             if db.debug then Say(db.channel .. " requested for " .. name .. " (" .. spell .. ").") end
@@ -149,7 +148,8 @@ frame:SetScript("OnEvent", function(_, event, arg)
         if type(ForeverThanksDB) ~= "table" then ForeverThanksDB = {} end
         db = ForeverThanksDB
         if type(db.enabled) ~= "boolean" then db.enabled = true end
-        if db.channel ~= "SAY" and db.channel ~= "WHISPER" then db.channel = "SAY" end
+        -- Migrate saved SAY settings from the unsuccessful automatic-say test.
+        db.channel = "WHISPER"
         if type(db.groups) ~= "boolean" then db.groups = true end
         if type(db.cooldown) ~= "number" or db.cooldown ~= db.cooldown then db.cooldown = 60 end
         db.cooldown = math.max(30, math.min(3600, db.cooldown))
@@ -181,10 +181,7 @@ SlashCmdList.FOREVERTHANKS = function(input)
         db.enabled = cmd == "on"; Baseline()
         Say(db.enabled and "Enabled." or "Disabled.")
     elseif cmd == "channel" then
-        local channel = rest:upper()
-        if channel == "SAY" or channel == "WHISPER" then
-            db.channel = channel; Say("Thank-you channel: " .. channel:lower() .. ".")
-        else Say("Use /ft channel say | whisper") end
+        Say("This version uses automatic whispers.")
     elseif cmd == "groups" and (rest == "on" or rest == "off") then
         db.groups = rest == "on"; Baseline()
         Say("Thanks while grouped: " .. (db.groups and "on" or "off"))
@@ -211,7 +208,7 @@ SlashCmdList.FOREVERTHANKS = function(input)
         Say("Out of combat only. Existing buffs on login/zoning/combat exit are ignored.")
     else
         Say("/ft on | off | status | preview | debug")
-        Say("/ft channel say | whisper (default: say)")
+        Say("Thank-you messages are sent automatically by whisper.")
         Say("/ft groups on|off ; /ft cooldown 60 ; /ft message <text>|random")
     end
 end

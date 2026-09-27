@@ -1,3 +1,9 @@
+# 0.1.0-beta.5
+
+- Restored automatic whispers after automatic SAY failed in the user's Forever test.
+- Migrates saved SAY settings to WHISPER on load; the channel command can no longer enable SAY.
+- Preserves 28 replies, other saved preferences, buff filters, and cooldowns.
+
 # 0.1.0-beta.4
 
 - Automatically attempts SAY outdoors as well as inside instances, for Forever beta testing.
