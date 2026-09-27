@@ -160,18 +160,16 @@ test("28 unique replies with no consecutive random repeat", function()
     end
     local count = 0; for _ in pairs(replies) do count = count + 1 end; eq(count, 28)
 end)
-test("outdoor SAY is a manual draft; whispers remain automatic", function()
+test("outdoor SAY is attempted automatically without drafts or input", function()
     local h = active(); h.outdoors = true; h:add(1, 3600); h:change(); h:advance(1)
-    eq(#h.sent, 0); eq(h.draft, nil); h:cmd("send"); eq(h.draft, nil); h:advance(0); assert(h.draft:find("/say ", 1, true) == 1)
-    h.draft = nil; h:cmd("send"); eq(h.draft, nil)
-    h = active({channel = "WHISPER"}); h.outdoors = true; h:add(1, 3600); h:change(); h:advance(1); eq(#h.sent, 1)
+    eq(#h.sent, 1); eq(h.sent[1].channel, "SAY"); eq(h.sent[1].recipient, nil); eq(h.draft, nil)
+    h:cmd("send"); h:advance(0); eq(#h.sent, 1); eq(h.draft, nil)
 end)
-test("outdoor drafts expire and cancel on disable or channel change", function()
-    for _, action in ipairs({"off", "channel whisper", "expire"}) do
-        local h = active(); h.outdoors = true; h:add(1, 3600); h:change(); h:advance(1)
-        if action == "expire" then h:advance(31) else h:cmd(action) end
-        h:cmd("send"); eq(h.draft, nil); eq(#h.sent, 0)
-    end
+test("blocked outdoor SAY is reported without automatic retries", function()
+    local h = active(); h.outdoors = true; h.sendError = true
+    h:add(1, 3600); h:change(); h:advance(1); h:change(); h:advance(10)
+    eq(#h.sent, 0); eq(h.draft, nil)
+    h:cmd("status"); assert(table.concat(h.output):find("send errors=1", 1, true))
 end)
 for _, item in ipairs(tests) do
     item[2](); passed = passed + 1; print("PASS " .. item[1])

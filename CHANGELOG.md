@@ -1,3 +1,10 @@
+# 0.1.0-beta.4
+
+- Automatically attempts SAY outdoors as well as inside instances, for Forever beta testing.
+- Removed manual say drafts and the send command. Optional automatic WHISPER remains available.
+- Keeps 28 replies, cooldowns, and out-of-combat restrictions.
+- Actual outdoor SAY delivery must be tested in the Forever client. Blocked sends are reported without repeated retries or manual prompts.
+
 # 0.1.0-beta.3
 
 - Corrected outdoor say handling: a local prompt offers /ft send, which opens a prepared /say message; the player presses Enter to submit it.

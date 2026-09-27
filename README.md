@@ -1,56 +1,44 @@
 # forever_thanks
 
-Friendly automatic thank-you messages for **World of Warcraft: Forever beta (1.60.1)**, by Sinestro. Based on the idea and messages from OctoThanks, rebuilt for Forever's aura APIs. This is a beta, not the Turtle/OctoWoW addon.
+Friendly automatic buff thank-yous for **World of Warcraft: Forever beta 1.60.1**, by Sinestro.
 
-Uses **say by default**, so nearby players can hear your thanks. Use `/ft channel whisper` for private thanks to the caster, or `/ft channel say` to switch back. The choice is saved across reloads. Existing settings without a channel default to say.
+This build **attempts automatic SAY everywhere, including outdoors**, so its behavior can be tested on the Forever client. There is no manual draft or send step. Whether the beta permits outdoor say has not yet been verified in-game. If the client rejects a send, the addon reports the error without retrying the same buff repeatedly.
 
-**Outdoor say requires your input:** a qualifying buff creates a local prompt. Type `/ft send`, then press Enter to submit the prepared message. The draft expires after 30 seconds. Say inside instances is attempted automatically where allowed; whisper remains automatic. This respects modern WoW's chat restrictions rather than repeatedly attempting a blocked outdoor send.
+Use `/ft channel whisper` for automatic private thanks, or `/ft channel say` for the automatic say test. New settings default to say; explicit saved channel choices remain saved.
 
 ## Features
 
-- Thanks other players for newly applied or refreshed helpful buffs whose reported duration is **strictly greater than 120 seconds**.
-- 28 varied messages, without repeating the previous random message. Includes playful British/Cockney, modern US street, retro jive-style, Australian, New Zealand, South African, Irish, and Canadian phrasing.
-- Resolves the actual caster using `C_UnitAuras.GetAuraCasterGUID`, including when `sourceUnit` is nil.
-- One-second delay, 60-second per-player cooldown, and at most one chat attempt every three seconds. Simultaneous excess thanks are dropped, not queued indefinitely.
-- Ignores self-buffs, NPC buffs, permanent/unknown-duration effects, and short effects such as Renew.
-- No mass thanks for existing buffs when logging in, reloading, zoning, or leaving combat.
-- Saved settings, optional custom message, and local-only preview/diagnostics.
+- Only helpful player buffs whose reported duration is **strictly greater than 120 seconds** qualify.
+- 28 rotating friendly replies with no consecutive random repeats, including slang-inspired English phrases.
+- Resolves casters via `C_UnitAuras.GetAuraCasterGUID`, including when `sourceUnit` is nil.
+- One-second delay, 60-second per-player cooldown, and at most one chat attempt every three seconds.
+- Ignores self-buffs, NPCs, permanent/unknown-duration effects, short HoTs, and existing buffs on login/reload/zoning/combat exit.
+- Out of combat only. Restricted/secret aura information and unresolved casters are skipped.
 
-## Install
+## Install and commands
 
-Download the release ZIP (not GitHub's source archive). Extract the **forever_thanks** folder into your Forever client's `Interface/AddOns` directory, then restart the client if it was open. Enable forever_thanks in the AddOns list. Disable any other auto-thanks addon to avoid duplicate messages.
+Extract `forever_thanks` into your Forever client's `Interface/AddOns` directory. Restart the client if adding it for the first time, or use `/reload` after updating. Disable any other auto-thanks addon to avoid duplicate replies.
 
-The final structure must be `Interface/AddOns/forever_thanks/forever_thanks.toc`.
+- `/ft status` - selected channel and diagnostics.
+- `/ft channel say` / `/ft channel whisper` - choose the automatic chat channel.
+- `/ft on` / `/ft off` - enable or disable.
+- `/ft preview` - local preview only.
+- `/ft groups on|off` - thanks while grouped (default on).
+- `/ft cooldown 60` - 30-3600 seconds per player.
+- `/ft message Thanks for %s!` - custom reply; `%s` inserts the buff name.
+- `/ft message random` - restore all 28 replies.
+- `/ft debug` - toggle local chat-attempt diagnostics.
 
-## Commands
+`/foreverthanks` and `/forever_thanks` are aliases.
 
-| Command | Action |
-| --- | --- |
-| `/ft status` | Settings and session diagnostics |
-| `/ft send` | Open a pending outdoor say draft; press Enter to submit |
-| `/ft on` / `/ft off` | Enable/disable automatic thanks |
-| `/ft channel say` / `/ft channel whisper` | Select public say (default) or private whisper |
-| `/ft preview` | Show a sample locally; does not whisper anyone |
-| `/ft groups on` / `/ft groups off` | Enable/disable thanks while you are grouped (default on) |
-| `/ft cooldown 60` | Per-player cooldown, 30-3600 seconds |
-| `/ft message Thanks for %s!` | Custom message; `%s` becomes the buff name |
-| `/ft message random` | Restore the 28 rotating messages |
-| `/ft debug` | Toggle local diagnostics for whisper attempts |
+## Test automatic say
 
-`/foreverthanks` and `/forever_thanks` are aliases for `/ft`.
+Run `/reload`, `/ft channel say`, and `/ft debug`. While out of combat outdoors, have another player give you a buff longer than two minutes. Wait one second and check for a real say message. If nothing appears, run `/ft status` and report the output plus any game error. Counters show API requests, not confirmed delivery.
 
-## Beta limitations and testing
+Caster lookup and delayed whisper were previously tested on Forever 1.60.1. Automatic outdoor say is experimental until the in-game test succeeds. The addon does not bypass client restrictions.
 
-**Out-of-combat only.** Restricted/secret aura information is skipped; the addon never attempts to bypass the client's restrictions. Buffs received during combat are deliberately not thanked later. Unresolvable casters are skipped. WoW may reject automatic chat (channel restrictions, offline whisper recipients, or future beta API changes); the status counter tracks API requests, not confirmed delivery. Say support has mocked-API tests but still needs an in-game check.
+Run `lua5.1 tests/test.lua` from the repository root for mocked tests. `build.ps1` creates the installable ZIP.
 
-The caster lookup and delayed whisper were tested successfully in Forever 1.60.1. The complete addon has automated mocked-API tests but still needs an in-game end-to-end test.
-
-To test: use `/ft status`, have another player apply a buff longer than two minutes while you are out of combat, and wait one second. Outdoors, expect a local prompt: use `/ft send` and press Enter. Check no repeat prompt within 60 seconds, no thanks for your own buffs or Renew, and none on `/reload`. Then select whisper, wait for the cooldown, and test another buff; the thanks should be private and automatic.
-
-## Development
-
-Run `lua5.1 tests/test.lua` from the repository root. `build.ps1` creates an installable ZIP in `dist` using only the runtime files and documentation. No external runtime libraries are required by the addon.
-
-Source and issues: https://github.com/DjSinestro1/forever_thanks
+Source: https://github.com/DjSinestro1/forever_thanks
 
 All rights reserved. No affiliation with Blizzard Entertainment.
