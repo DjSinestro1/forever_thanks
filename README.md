@@ -2,9 +2,9 @@
 
 Friendly automatic buff thank-yous for **World of Warcraft: Forever beta 1.60.1**, by Sinestro.
 
-This build sends **automatic private whispers** to players who buff you. There is no manual draft or send step. If the client rejects a send, the addon reports the error without retrying the same buff repeatedly.
+This build defaults to **automatic private whispers** to players who buff you, with an optional built-in THANK emote mode. There is no manual draft or send step. If the client rejects a send, the addon reports the error without retrying the same buff repeatedly.
 
-Automatic say did not work in the user's Forever test. This version restores whispers and automatically migrates saved SAY settings on load. Other preferences are preserved.
+Automatic say did not work in the user's Forever test. Saved SAY settings migrate to WHISPER; an explicitly selected EMOTE mode persists across reloads. Other preferences are preserved.
 
 ## Features
 
@@ -20,6 +20,8 @@ Automatic say did not work in the user's Forever test. This version restores whi
 Extract `forever_thanks` into your Forever client's `Interface/AddOns` directory. Restart the client if adding it for the first time, or use `/reload` after updating. Disable any other auto-thanks addon to avoid duplicate replies.
 
 - `/ft status` - selected channel and diagnostics.
+- `/ft mode whisper` - automatic private replies (default).
+- `/ft mode emote` - built-in THANK emote directed at the buff caster.
 - `/ft on` / `/ft off` - enable or disable.
 - `/ft preview` - local preview only.
 - `/ft groups on|off` - thanks while grouped (default on).
@@ -29,6 +31,8 @@ Extract `forever_thanks` into your Forever client's `Interface/AddOns` directory
 - `/ft debug` - toggle local chat-attempt diagnostics.
 
 `/foreverthanks` and `/forever_thanks` are aliases.
+
+`channel` is an alias for `mode`. Emote mode uses the game's fixed thank-you, not the 28 whisper phrases or custom text. It passes the caster's name to the emote API without changing your target. A delayed untargeted THANK worked in the user's Forever test; targeted delivery still needs in-game testing. Range/client restrictions may prevent the intended result. Failed requests do not trigger a whisper fallback or retry. Mode changes cancel pending replies.
 
 ## Test automatic whispers
 

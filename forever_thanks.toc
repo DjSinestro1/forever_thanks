@@ -2,7 +2,7 @@
 ## Title: forever_thanks
 ## Notes: Automatic thank-you whispers for buffs over two minutes. Forever beta.
 ## Author: Sinestro
-## Version: 0.1.0-beta.5
+## Version: 0.1.0-beta.6
 ## SavedVariables: ForeverThanksDB
 
 forever_thanks.lua

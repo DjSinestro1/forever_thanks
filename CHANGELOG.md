@@ -1,3 +1,11 @@
+# 0.1.0-beta.6
+
+- Adds optional targeted THANK emotes via mode emote; automatic whispers remain the default.
+- Saves the selected mode; mode whisper restores private replies. The channel command is an alias.
+- Preserves duration filters, cooldowns, and 28 whisper replies. Mode changes cancel pending replies.
+- No chat-text emotes, retargeting, automatic whisper fallback, or retries when an emote fails.
+- Targeted delivery and Classic/Retail automatic emotes still need in-game testing.
+
 # 0.1.0-beta.5
 
 - Restored automatic whispers after automatic SAY failed in the user's Forever test.

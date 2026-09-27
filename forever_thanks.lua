@@ -1,5 +1,5 @@
 local addonName = ...
-local VERSION = "0.1.0-beta.5"
+local VERSION = "0.1.0-beta.6"
 local messages = {
     "Ayyy, that is nice! Appreciate you and your buffs!",
     "Much appreciated! You are a buffing legend.",
@@ -67,6 +67,23 @@ local function Message(spell)
     return messages[index]
 end
 
+local function SendThanks(name, spell)
+    if db.channel == "EMOTE" then
+        local emote = C_ChatInfo and C_ChatInfo.PerformEmote
+        if type(emote) == "function" then
+            local ok, result = pcall(emote, "THANK", name)
+            return ok and (not issecretvalue or not issecretvalue(result)) and result == true
+        end
+        -- Older DoEmote return values differ; count only the API request.
+        if type(DoEmote) == "function" then return pcall(DoEmote, "THANK", name) end
+        return false
+    end
+    local text = Message(spell)
+    if #text > 255 then Say("Message too long; shorten /ft message."); return false end
+    local send = C_ChatInfo and C_ChatInfo.SendChatMessage or SendChatMessage
+    if type(send) ~= "function" then return false end
+    return pcall(send, text, "WHISPER", nil, name)
+end
 local function Queue(guid, spell)
     local now = GetTime()
     if pending[guid] or (lastSent[guid] and now - lastSent[guid] < db.cooldown) then return end
@@ -84,16 +101,14 @@ local function Queue(guid, spell)
         -- Cap bursts from multiple players as well as repeated buffs from one player.
         if time - lastAttempt < 3 then return end
         if lastSent[guid] and time - lastSent[guid] < db.cooldown then return end
-        local text = Message(spell)
-        if #text > 255 then Say("Message too long; use /ft message with shorter text."); return end
         lastAttempt, lastSent[guid] = time, time
-        local success = pcall(C_ChatInfo.SendChatMessage, text, "WHISPER", nil, name)
+        local success = SendThanks(name, spell)
         if success then
             sent = sent + 1
             if db.debug then Say(db.channel .. " requested for " .. name .. " (" .. spell .. ").") end
         else
             failures = failures + 1
-            Say(db.channel .. " blocked by the client. /ft status shows diagnostics.")
+            Say(db.channel .. " unavailable or blocked by the client. /ft status shows diagnostics.")
         end
     end)
 end
@@ -148,8 +163,8 @@ frame:SetScript("OnEvent", function(_, event, arg)
         if type(ForeverThanksDB) ~= "table" then ForeverThanksDB = {} end
         db = ForeverThanksDB
         if type(db.enabled) ~= "boolean" then db.enabled = true end
-        -- Migrate saved SAY settings from the unsuccessful automatic-say test.
-        db.channel = "WHISPER"
+        -- Whisper is the default; preserve only an explicitly selected emote mode.
+        if db.channel ~= "EMOTE" then db.channel = "WHISPER" end
         if type(db.groups) ~= "boolean" then db.groups = true end
         if type(db.cooldown) ~= "number" or db.cooldown ~= db.cooldown then db.cooldown = 60 end
         db.cooldown = math.max(30, math.min(3600, db.cooldown))
@@ -180,8 +195,13 @@ SlashCmdList.FOREVERTHANKS = function(input)
     if cmd == "on" or cmd == "off" then
         db.enabled = cmd == "on"; Baseline()
         Say(db.enabled and "Enabled." or "Disabled.")
-    elseif cmd == "channel" then
-        Say("This version uses automatic whispers.")
+    elseif cmd == "channel" or cmd == "mode" then
+        local channel = rest:upper()
+        if channel == "WHISPER" or channel == "EMOTE" then
+            if db.channel ~= channel then CancelPending() end
+            db.channel = channel
+            Say("Thank-you mode: " .. channel:lower() .. ".")
+        else Say("Use /ft mode whisper | emote (default: whisper).") end
     elseif cmd == "groups" and (rest == "on" or rest == "off") then
         db.groups = rest == "on"; Baseline()
         Say("Thanks while grouped: " .. (db.groups and "on" or "off"))
@@ -208,7 +228,7 @@ SlashCmdList.FOREVERTHANKS = function(input)
         Say("Out of combat only. Existing buffs on login/zoning/combat exit are ignored.")
     else
         Say("/ft on | off | status | preview | debug")
-        Say("Thank-you messages are sent automatically by whisper.")
+        Say("/ft mode whisper | emote (default: whisper)")
         Say("/ft groups on|off ; /ft cooldown 60 ; /ft message <text>|random")
     end
 end
