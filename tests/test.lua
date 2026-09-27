@@ -16,9 +16,12 @@ local function harness(saved)
     env.ChatFrameUtil = {OpenChat = function(text) h.draft = text end}
     env.IsInGroup = function() return h.grouped end
     env.UnitGUID = function() return "Player-Self" end
+    env.UnitName = function() error("Must not read the selected target") end
+    env.TargetUnit = function() error("Must not change the selected target") end
+    env.ClearTarget = function() error("Must not clear the selected target") end
     env.UnitNameFromGUID = function(guid)
         if h.noName then return nil end
-        return guid:gsub("Player%-", ""), "Realm"
+        return h.casterName or guid:gsub("Player%-", ""), "Realm"
     end
     env.C_Timer = {After = function(delay, fn) h.tasks[#h.tasks + 1] = {h.now + delay, fn} end}
     env.C_ChatInfo = {SendChatMessage = function(text, channel, language, recipient)
@@ -28,7 +31,8 @@ local function harness(saved)
     env.C_ChatInfo.PerformEmote = function(token, target)
         h.emotes[#h.emotes + 1] = {token = token, target = target}
         if h.emoteError then error("blocked") end
-        return not h.emoteRejected
+        if h.emoteReturnNil then return nil end
+        return h.emoteRejected or false
     end
     env.C_UnitAuras = {
         GetAuraDataByIndex = function(_, i, filter)
@@ -182,7 +186,8 @@ test("optional targeted emote persists and sends no whisper", function()
     h:cmd("mode raid"); eq(h.env.ForeverThanksDB.channel, "EMOTE")
     h = active(h.env.ForeverThanksDB); h:add(1, 3600); h:change(); h:advance(1)
     eq(#h.sent, 0); eq(#h.emotes, 1)
-    eq(h.emotes[1].token, "THANK"); eq(h.emotes[1].target, "BuffFriend-Realm")
+    eq(h.emotes[1].token, "THANK"); eq(h.emotes[1].target, "BuffFriend")
+    h:cmd("status"); assert(table.concat(h.output):find("send errors=0", 1, true))
     h:cmd("mode whisper"); h:advance(61); h:add(2, 3600); h:change(); h:advance(1)
     eq(#h.sent, 1); eq(#h.emotes, 1); eq(h.sent[1].channel, "WHISPER")
 end)
@@ -206,7 +211,7 @@ test("emote combat and disable cancel queued replies", function()
         h:advance(1); eq(#h.emotes, 0); eq(#h.sent, 0)
     end
 end)
-test("emote false and thrown errors are counted without retry or whisper fallback", function()
+test("emote restricted=true and thrown errors are counted without retry or whisper fallback", function()
     for _, flag in ipairs({"emoteRejected", "emoteError"}) do
         local h = active({channel = "EMOTE"}); h[flag] = true
         h:add(1, 3600); h:change(); h:advance(1); h:change(); h:advance(10)
@@ -218,7 +223,7 @@ test("legacy emote fallback and missing API handled", function()
     local h = active({channel = "EMOTE"}); h.env.C_ChatInfo.PerformEmote = nil
     h.env.DoEmote = function(token, target) h.emotes[1] = {token = token, target = target} end
     h:add(1, 3600); h:change(); h:advance(1)
-    eq(h.emotes[1].target, "BuffFriend-Realm"); eq(h.emotes[1].token, "THANK"); eq(#h.sent, 0)
+    eq(h.emotes[1].target, "BuffFriend"); eq(h.emotes[1].token, "THANK"); eq(#h.sent, 0)
     h = active({channel = "EMOTE"}); h.env.C_ChatInfo.PerformEmote = nil
     h:add(1, 3600); h:change(); h:advance(1); h:cmd("status")
     eq(#h.sent, 0); assert(table.concat(h.output):find("send errors=1", 1, true))
@@ -227,6 +232,19 @@ test("emote bypasses custom whisper formatting and preview sends nothing", funct
     local h = active({channel = "EMOTE", message = string.rep("%s", 100)})
     h:cmd("preview"); eq(#h.emotes, 0)
     h:add(1, 3600); h:change(); h:advance(1); eq(#h.emotes, 1); eq(#h.sent, 0)
+end)
+test("plain caster name including spaces is retained for delayed emotes, not whispers", function()
+    local h = active({channel = "EMOTE"}); h.casterName = "Buff Friend"
+    h:add(1, 3600); h:change(); h.casterName = "Somebody Else"; h:advance(1)
+    eq(h.emotes[1].target, "Buff Friend"); eq(#h.sent, 0)
+    h:cmd("mode whisper"); h.casterName = "Buff Friend"; h:advance(61)
+    h:add(2, 3600); h:change(); h:advance(1)
+    eq(h.sent[1].recipient, "Buff Friend-Realm"); eq(#h.emotes, 1)
+end)
+test("nil emote restriction flag is not reported as blocked", function()
+    local h = active({channel = "EMOTE"}); h.emoteReturnNil = true
+    h:add(1, 3600); h:change(); h:advance(1); h:cmd("status")
+    eq(#h.emotes, 1); assert(table.concat(h.output):find("send errors=0", 1, true))
 end)
 for _, item in ipairs(tests) do
     item[2](); passed = passed + 1; print("PASS " .. item[1])

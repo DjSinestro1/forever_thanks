@@ -1,3 +1,11 @@
+# 0.1.0-beta.7
+
+- Fixes targeted emotes by using the buff caster's plain character name, preserving spaces; whispers still use Name-Realm.
+- Never requires, reads, or changes the player's selected target.
+- Fixes false blocked warnings: PerformEmote returns a restriction flag, as used by Blizzard's chat UI, not a success flag.
+- The user confirmed a delayed plain-name THANK works after clearing the selected target. Full addon flow remains to be retested in-game.
+- Whisper stays the default; saved emote mode and other preferences are preserved.
+
 # 0.1.0-beta.6
 
 - Adds optional targeted THANK emotes via mode emote; automatic whispers remain the default.

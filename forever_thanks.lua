@@ -1,5 +1,5 @@
 local addonName = ...
-local VERSION = "0.1.0-beta.6"
+local VERSION = "0.1.0-beta.7"
 local messages = {
     "Ayyy, that is nice! Appreciate you and your buffs!",
     "Much appreciated! You are a buffing legend.",
@@ -67,15 +67,16 @@ local function Message(spell)
     return messages[index]
 end
 
-local function SendThanks(name, spell)
+local function SendThanks(name, spell, emoteName)
     if db.channel == "EMOTE" then
         local emote = C_ChatInfo and C_ChatInfo.PerformEmote
         if type(emote) == "function" then
-            local ok, result = pcall(emote, "THANK", name)
-            return ok and (not issecretvalue or not issecretvalue(result)) and result == true
+            -- Like Blizzard's chat UI, interpret the return as "restricted".
+            local ok, restricted = pcall(emote, "THANK", emoteName)
+            return ok and Readable(restricted) and not restricted
         end
         -- Older DoEmote return values differ; count only the API request.
-        if type(DoEmote) == "function" then return pcall(DoEmote, "THANK", name) end
+        if type(DoEmote) == "function" then return pcall(DoEmote, "THANK", emoteName) end
         return false
     end
     local text = Message(spell)
@@ -90,6 +91,9 @@ local function Queue(guid, spell)
     local ok, name, realm = pcall(UnitNameFromGUID, guid)
     if not ok or not Readable(name) or not Readable(realm)
         or type(name) ~= "string" or name == "" then return end
+    -- Emotes need the plain name; whispers retain the realm-qualified address.
+    -- Never inspect or change the player's selected target.
+    local emoteName = name
     if type(realm) == "string" and realm ~= "" then name = name .. "-" .. realm end
     local ticket = generation
     pending[guid] = true
@@ -102,7 +106,7 @@ local function Queue(guid, spell)
         if time - lastAttempt < 3 then return end
         if lastSent[guid] and time - lastSent[guid] < db.cooldown then return end
         lastAttempt, lastSent[guid] = time, time
-        local success = SendThanks(name, spell)
+        local success = SendThanks(name, spell, emoteName)
         if success then
             sent = sent + 1
             if db.debug then Say(db.channel .. " requested for " .. name .. " (" .. spell .. ").") end

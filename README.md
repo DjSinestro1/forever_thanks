@@ -32,7 +32,9 @@ Extract `forever_thanks` into your Forever client's `Interface/AddOns` directory
 
 `/foreverthanks` and `/forever_thanks` are aliases.
 
-`channel` is an alias for `mode`. Emote mode uses the game's fixed thank-you, not the 28 whisper phrases or custom text. It passes the caster's name to the emote API without changing your target. A delayed untargeted THANK worked in the user's Forever test; targeted delivery still needs in-game testing. Range/client restrictions may prevent the intended result. Failed requests do not trigger a whisper fallback or retry. Mode changes cancel pending replies.
+`channel` is an alias for `mode`. Emote mode uses the game's fixed thank-you, not the 28 whisper phrases or custom text. It passes the caster's plain character name (without the realm suffix) to the emote API. It never reads or changes your selected target; you can keep an enemy targeted or have no target. Whispers still use the realm-qualified name.
+
+The user confirmed that a delayed plain-name THANK reaches the intended player after clearing the selected target. The updated addon flow still needs an in-game retest. Range/client restrictions may prevent the intended result. Failed requests do not trigger a whisper fallback or retry. Mode changes cancel pending replies. Emote return values are treated as restriction flags, matching [Blizzard's chat UI](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_ChatFrameBase/Shared/ChatFrameEditBox.lua).
 
 ## Test automatic whispers
 
