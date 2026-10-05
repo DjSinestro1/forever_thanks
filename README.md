@@ -11,7 +11,9 @@ Automatic say did not work in the user's Forever test. Saved SAY settings migrat
 - Only helpful player buffs whose reported duration is **strictly greater than 120 seconds** qualify.
 - 28 rotating friendly replies with no consecutive random repeats, including slang-inspired English phrases.
 - Resolves casters via `C_UnitAuras.GetAuraCasterGUID`, including when `sourceUnit` is nil.
-- One-second delay, 60-second per-player cooldown, and at most one chat attempt every three seconds.
+- Five-second delay, 60-second per-player cooldown, and at most one chat attempt every three seconds.
+- An in-game options window is available from `/ft gui` or the minimap button. Settings are saved automatically.
+- The options window can suppress party/raid whispers, choose random positive emotes, and manage ignored buff names or IDs.
 - Ignores self-buffs, NPCs, permanent/unknown-duration effects, short HoTs, and existing buffs on login/reload/zoning/combat exit.
 - Silently collects restored buffs for at least five seconds after entering the world, then waits for one second without player-aura updates before taking a final snapshot. No thanks are queued during this period or while between zones.
 - Requires readable expiration/duration values indicating a recent application or refresh (within five seconds). Old buffs arriving after the settling period are skipped too.
@@ -29,6 +31,10 @@ Extract `forever_thanks` into your Forever client's `Interface/AddOns` directory
 - `/ft on` / `/ft off` - enable or disable.
 - `/ft preview` - local preview only.
 - `/ft groups on|off` - thanks while grouped (default on).
+- `/ft groupwhisper on|off` - allow or suppress whispers to party/raid buff casters.
+- `/ft delay 5` - wait five seconds after detection before replying.
+- `/ft emotes thank|random` - use the fixed THANK emote or rotate positive emotes.
+- `/ft ignore add|remove|list|clear <spell name or spell ID>` - manage ignored buffs.
 - `/ft cooldown 60` - 30-3600 seconds per player.
 - `/ft message Thanks for %s!` - custom reply; `%s` inserts the buff name.
 - `/ft message random` - restore all 28 replies.
@@ -36,13 +42,13 @@ Extract `forever_thanks` into your Forever client's `Interface/AddOns` directory
 
 `/foreverthanks` and `/forever_thanks` are aliases.
 
-`channel` is an alias for `mode`. Emote mode uses the game's fixed thank-you, not the 28 whisper phrases or custom text. It passes the caster's plain character name (without the realm suffix) to the emote API. It never reads or changes your selected target; you can keep an enemy targeted or have no target. Whispers still use the realm-qualified name.
+`channel` is an alias for `mode`. Emote mode uses the game's fixed THANK emote or the selected random positive emote style, not the 28 whisper phrases or custom text. It passes the caster's plain character name (without the realm suffix) to the emote API. It never reads or changes your selected target; you can keep an enemy targeted or have no target. Whispers still use the realm-qualified name.
 
 The user confirmed the targeted-emote addon flow works without selecting the buff caster. The new loading/zone-transfer suppression still needs an in-game retest. Range/client restrictions may prevent the intended result. Failed requests do not trigger a whisper fallback or retry. Mode changes cancel pending replies. Emote return values are treated as restriction flags, matching [Blizzard's chat UI](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_ChatFrameBase/Shared/ChatFrameEditBox.lua).
 
 ## Test automatic whispers
 
-Run `/reload` and optionally `/ft debug`. Wait until `/ft status` says `watching` (at least five seconds after loading). While out of combat, have another player give you a buff longer than two minutes. Wait one second and check for an outgoing whisper. If nothing appears, run `/ft status` and report the output plus any game error. Counters show API requests, not confirmed delivery.
+Run `/reload` and optionally `/ft debug`. Wait until `/ft status` says `watching` (at least five seconds after loading). While out of combat, have another player give you a buff longer than two minutes. Wait five seconds and check for an outgoing whisper. If nothing appears, run `/ft status` and report the output plus any game error. Counters show API requests, not confirmed delivery.
 
 To check the loading fix, keep a buff and log out/back in, reload, and use a portal or enter/leave an instance. Existing buffs should generate no thanks. After the settling period ends, a new long-duration buff or refresh should generate one reply. Repeat in `/ft mode emote` without targeting the caster. The mocked regression suite covers delayed restoration, changed aura IDs, rapid transfers, blocked reads, and both reply modes; real-client testing remains necessary.
 

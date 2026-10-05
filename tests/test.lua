@@ -3,6 +3,10 @@ local tests, passed = {}, 0
 local function test(name, fn) tests[#tests + 1] = {name, fn} end
 local function eq(a, b) assert(a == b, tostring(a) .. " ~= " .. tostring(b)) end
 local function harness(saved)
+    saved = saved or {}
+    local useDefaultDelay = saved.__defaultDelay
+    saved.__defaultDelay = nil
+    if not useDefaultDelay and saved.delay == nil then saved.delay = 1 end
     local h = {auras = {}, now = 100, tasks = {}, sent = {}, emotes = {}, output = {}, combat = false, grouped = false}
     local env = setmetatable({ForeverThanksDB = saved, SlashCmdList = {}}, {__index = _G})
     env.print = function(text) h.output[#h.output + 1] = text end
@@ -15,7 +19,14 @@ local function harness(saved)
     env.IsInInstance = function() return not h.outdoors end
     env.ChatFrameUtil = {OpenChat = function(text) h.draft = text end}
     env.IsInGroup = function() return h.grouped end
-    env.UnitGUID = function() return "Player-Self" end
+    env.GetNumPartyMembers = function() return h.party and 1 or 0 end
+    env.GetNumRaidMembers = function() return h.raid and 1 or 0 end
+    env.UnitGUID = function(unit)
+        if unit == "player" then return "Player-Self" end
+        if unit == "party1" and h.party then return h.party end
+        if unit == "raid1" and h.raid then return h.raid end
+        return nil
+    end
     env.UnitName = function() error("Must not read the selected target") end
     env.TargetUnit = function() error("Must not change the selected target") end
     env.ClearTarget = function() error("Must not clear the selected target") end
@@ -60,9 +71,9 @@ local function harness(saved)
         end
         self.now = finish
     end
-    function h:add(id, duration, guid, name)
+    function h:add(id, duration, guid, name, spellId)
         local aura = {auraInstanceID = id, duration = duration, expirationTime = self.now + duration,
-            guid = guid or "Player-BuffFriend", name = name or "Blessing of Might", sourceUnit = nil}
+            spellId = spellId, guid = guid or "Player-BuffFriend", name = name or "Blessing of Might", sourceUnit = nil}
         self.auras[#self.auras + 1] = aura
         return aura
     end
@@ -71,7 +82,9 @@ local function harness(saved)
     h.env = env
     return h
 end
-local function active(saved) local h = harness(saved); h:event("PLAYER_ENTERING_WORLD"); h:advance(6); return h end
+local function active(saved)
+    local h = harness(saved); h:event("PLAYER_ENTERING_WORLD"); h:advance(6); return h
+end
 
 test("nil sourceUnit resolves caster and delayed realm-qualified whisper", function()
     local h = active({channel = "WHISPER"}); h:add(1, 3600); h:change(); eq(#h.sent, 0)
@@ -143,6 +156,28 @@ test("saved settings honored and corrupt defaults normalized", function()
     h = active({cooldown = "bad", message = 7}); eq(h.env.ForeverThanksDB.cooldown, 60); eq(h.env.ForeverThanksDB.message, nil)
     h:cmd("cooldown 5"); eq(h.env.ForeverThanksDB.cooldown, 60)
     h:cmd("cooldown 90"); eq(h.env.ForeverThanksDB.cooldown, 90)
+end)
+test("new installations default to a five-second reply delay", function()
+    local h = harness({__defaultDelay = true}); eq(h.env.ForeverThanksDB.delay, 5)
+end)
+test("configured five-second delay is honored", function()
+    local h = active({delay = 5}); h:add(1, 3600); h:change(); h:advance(4); eq(#h.sent, 0)
+    h:advance(1); eq(#h.sent, 1)
+end)
+test("group whisper suppression checks the actual caster", function()
+    local h = active({skipGroupWhispers = true}); h.grouped = true; h.party = "Player-BuffFriend"
+    h:add(1, 3600, "Player-BuffFriend"); h:change(); h:advance(1); eq(#h.sent, 0)
+    h:add(2, 3600, "Player-Outsider"); h:change(); h:advance(1); eq(#h.sent, 1)
+end)
+test("ignored buff names and IDs prevent pending replies", function()
+    local h = active(); h:cmd("ignore add Blessing of Might"); h:add(1, 3600); h:change(); h:advance(1); eq(#h.sent, 0)
+    h:cmd("ignore remove Blessing of Might"); h:add(2, 3600, nil, "Other Buff", 12345); h:cmd("ignore add 12345")
+    h:change(); h:advance(1); eq(#h.sent, 0)
+end)
+test("random emote mode uses a positive targeted emote", function()
+    local h = active({channel = "EMOTE", emoteStyle = "RANDOM"}); h:add(1, 3600); h:change(); h:advance(1)
+    local allowed = {SALUTE = true, BOW = true, WAVE = true, CHEER = true, APPLAUD = true}
+    eq(#h.emotes, 1); assert(allowed[h.emotes[1].token]); eq(h.emotes[1].target, "BuffFriend")
 end)
 test("send error handled without retry storm", function()
     local h = active(); h.sendError = true; h:add(1, 3600); h:change(); h:advance(1); h:change(); h:advance(1)

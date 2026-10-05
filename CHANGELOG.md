@@ -1,3 +1,18 @@
+# 0.1.0-beta.10
+
+- Fixes the options window on ForeverWoW clients without the newer `SetBackdrop` API by using a compatible background texture fallback.
+- Makes the minimap button use either `Minimap` or `MinimapCluster`, places it visibly at the minimap corner, and explicitly shows it.
+
+# 0.1.0-beta.9
+
+- Adds an in-game options window opened with `/ft gui` or the new minimap button.
+- Adds saved controls for enable/disable, whisper/emote mode, five-second reply delay, cooldown, group handling, and custom messages.
+- Adds optional suppression of whispers to party/raid buff casters.
+- Adds random positive emotes: Salute, Bow, Wave, Cheer, and Applaud.
+- Adds an ignored-buff list that accepts spell names or spell IDs.
+- Keeps slash commands available as a troubleshooting and accessibility fallback.
+- Adds regression coverage for the new delay, group-caster filter, ignored buffs, random emotes, and five-second default.
+
 # 0.1.0-beta.8
 
 - Fixes false thanks when existing buffs arrive late after login, reload, portals, or instance/zone transfers.
