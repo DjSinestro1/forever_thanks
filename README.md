@@ -1,61 +1,66 @@
 # forever_thanks
 
-Friendly automatic buff thank-yous for **World of Warcraft: Forever beta 1.60.1**, by Sinestro.
-
-This build defaults to **automatic private whispers** to players who buff you, with an optional built-in THANK emote mode. There is no manual draft or send step. If the client rejects a send, the addon reports the error without retrying the same buff repeatedly.
-
-Automatic say did not work in the user's Forever test. Saved SAY settings migrate to WHISPER; an explicitly selected EMOTE mode persists across reloads. Other preferences are preserved.
+Friendly automatic thank-you whispers and targeted `/thank`-style emotes for
+**World of Warcraft: Forever beta 1.60.1**, by Sinestro.
 
 ## Features
 
-- Only helpful player buffs whose reported duration is **strictly greater than 120 seconds** qualify.
-- 28 rotating friendly replies with no consecutive random repeats, including slang-inspired English phrases.
-- Resolves casters via `C_UnitAuras.GetAuraCasterGUID`, including when `sourceUnit` is nil.
-- Five-second delay, 60-second per-player cooldown, and at most one chat attempt every three seconds.
-- An in-game options window is available from `/ft gui` or the minimap button. Settings are saved automatically.
-- The options window can suppress party/raid whispers, choose random positive emotes, and manage ignored buff names or IDs.
-- Ignores self-buffs, NPCs, permanent/unknown-duration effects, short HoTs, and existing buffs on login/reload/zoning/combat exit.
-- Silently collects restored buffs for at least five seconds after entering the world, then waits for one second without player-aura updates before taking a final snapshot. No thanks are queued during this period or while between zones.
-- Requires readable expiration/duration values indicating a recent application or refresh (within five seconds). Old buffs arriving after the settling period are skipped too.
-- Out of combat only. Restricted/secret aura information and unresolved casters are skipped.
+- Thanks players for newly applied or refreshed helpful buffs whose reported duration is **strictly greater than 120 seconds**.
+- Uses 28 varied thank-you messages and avoids repeating the same reply twice in a row.
+- Sends a private whisper by default, or a targeted emote without requiring the buff caster to be selected.
+- Waits five seconds after detecting a qualifying buff before replying.
+- Supports fixed `THANK` emotes or random positive emotes such as Salute, Bow, Wave, Cheer, and Applaud.
+- Can suppress whispers when the buff came from a party or raid member while still allowing emotes.
+- Includes an ignored-buff list using spell names or spell IDs, useful for buffs such as Campfire.
+- Ignores self-buffs, NPC buffs, permanent or unknown-duration effects, short effects such as Renew, and existing buffs restored during login, reloads, portals, or zone/instance transfers.
+- Runs out of combat and fails closed when the client hides aura or caster information.
+- Settings persist across reloads and logouts.
 
-This deliberately favors avoiding false thanks: a genuine buff received while loading/settling, or an application reported more than five seconds late, may receive no reply. `/ft status` shows when the addon is settling. Whisper remains the default; saved emote mode is preserved.
+## Install
 
-## Install and commands
+Download the release ZIP, not GitHub's source archive. Extract the **forever_thanks** folder into your Forever client's `Interface/AddOns` directory, then restart the client if it was open. Enable `forever_thanks` in the AddOns list. Disable any other automatic thank-you addon to avoid duplicate messages.
 
-Extract `forever_thanks` into your Forever client's `Interface/AddOns` directory. Restart the client if adding it for the first time, or use `/reload` after updating. Disable any other auto-thanks addon to avoid duplicate replies.
+The final structure must be:
 
-- `/ft status` - selected channel and diagnostics.
-- `/ft mode whisper` - automatic private replies (default).
-- `/ft mode emote` - built-in THANK emote directed at the buff caster.
-- `/ft on` / `/ft off` - enable or disable.
-- `/ft preview` - local preview only.
-- `/ft groups on|off` - thanks while grouped (default on).
-- `/ft groupwhisper on|off` - allow or suppress whispers to party/raid buff casters.
-- `/ft delay 5` - wait five seconds after detection before replying.
-- `/ft emotes thank|random` - use the fixed THANK emote or rotate positive emotes.
-- `/ft ignore add|remove|list|clear <spell name or spell ID>` - manage ignored buffs.
-- `/ft cooldown 60` - 30-3600 seconds per player.
-- `/ft message Thanks for %s!` - custom reply; `%s` inserts the buff name.
-- `/ft message random` - restore all 28 replies.
-- `/ft debug` - toggle local chat-attempt diagnostics.
+`Interface/AddOns/forever_thanks/forever_thanks.toc`
 
-`/foreverthanks` and `/forever_thanks` are aliases.
+## In-game options
 
-`channel` is an alias for `mode`. Emote mode uses the game's fixed THANK emote or the selected random positive emote style, not the 28 whisper phrases or custom text. It passes the caster's plain character name (without the realm suffix) to the emote API. It never reads or changes your selected target; you can keep an enemy targeted or have no target. Whispers still use the realm-qualified name.
+Open the settings window with:
 
-The user confirmed the targeted-emote addon flow works without selecting the buff caster. The new loading/zone-transfer suppression still needs an in-game retest. Range/client restrictions may prevent the intended result. Failed requests do not trigger a whisper fallback or retry. Mode changes cancel pending replies. Emote return values are treated as restriction flags, matching [Blizzard's chat UI](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_ChatFrameBase/Shared/ChatFrameEditBox.lua).
+`/ft gui`
 
-## Test automatic whispers
+You can also click the Forever Thanks button at the top-right of the minimap. The options window controls enabling the addon, Whisper or Emote mode, reply delay, cooldown, group behavior, random emotes, custom messages, and ignored buffs. Settings are saved automatically.
 
-Run `/reload` and optionally `/ft debug`. Wait until `/ft status` says `watching` (at least five seconds after loading). While out of combat, have another player give you a buff longer than two minutes. Wait five seconds and check for an outgoing whisper. If nothing appears, run `/ft status` and report the output plus any game error. Counters show API requests, not confirmed delivery.
+## Commands
 
-To check the loading fix, keep a buff and log out/back in, reload, and use a portal or enter/leave an instance. Existing buffs should generate no thanks. After the settling period ends, a new long-duration buff or refresh should generate one reply. Repeat in `/ft mode emote` without targeting the caster. The mocked regression suite covers delayed restoration, changed aura IDs, rapid transfers, blocked reads, and both reply modes; real-client testing remains necessary.
+| Command | Action |
+| --- | --- |
+| `/ft gui` | Open the in-game options window |
+| `/ft status` | Show settings and session diagnostics |
+| `/ft on` / `/ft off` | Enable or disable automatic replies |
+| `/ft mode whisper` | Send a private whisper; default mode |
+| `/ft mode emote` | Send a targeted `THANK` emote |
+| `/ft delay 5` | Set the reply delay from 0 to 60 seconds |
+| `/ft cooldown 60` | Set the per-player cooldown from 30 to 3600 seconds |
+| `/ft groups on` / `/ft groups off` | Allow or suppress all thanks while grouped |
+| `/ft groupwhisper on` / `/ft groupwhisper off` | Allow or suppress whispers to party/raid buff casters |
+| `/ft emotes thank` / `/ft emotes random` | Choose fixed THANK or random positive emotes |
+| `/ft message Thanks for %s!` | Set a custom whisper; `%s` becomes the buff name |
+| `/ft message random` | Restore the 28 rotating messages |
+| `/ft ignore add <name or ID>` | Add a buff to the ignore list |
+| `/ft ignore remove <name or ID>` | Remove a buff from the ignore list |
+| `/ft ignore list` | Show ignored buffs |
+| `/ft ignore clear` | Clear the ignored-buff list |
+| `/ft preview` | Show a local sample without sending anything |
+| `/ft debug` | Toggle local chat-attempt diagnostics |
 
-Caster lookup and delayed whisper were previously tested on Forever 1.60.1. The addon does not bypass client restrictions.
+`/foreverthanks` and `/forever_thanks` are aliases for `/ft`.
 
-Run `lua5.1 tests/test.lua` from the repository root for mocked tests. `build.ps1` creates the installable ZIP.
+## Important behavior
 
-Source: https://github.com/DjSinestro1/forever_thanks
+The addon intentionally ignores buffs that were already present during login, reload, zoning, or instance transfers so it does not thank everyone nearby for old buffs. New qualifying buffs must be detected while the client is ready and out of combat. Client restrictions, range limits, or unreadable aura data can prevent a reply.
+
+Whispers use the caster's realm-qualified name. Emotes use the caster's plain character name and do not read or change your selected target.
 
 All rights reserved. No affiliation with Blizzard Entertainment.

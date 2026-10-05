@@ -1,6 +1,6 @@
 ## Interface: 16001
 ## Title: forever_thanks
-## Notes: Automatic thank-you whispers for buffs over two minutes. Forever beta.
+## Notes: Automatic thank-you whispers or targeted emotes for long buffs. Forever beta.
 ## Author: Sinestro
 ## Version: 0.1.0-beta.10
 ## SavedVariables: ForeverThanksDB
