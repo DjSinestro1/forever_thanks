@@ -1,7 +1,8 @@
 local addonName = ...
-local VERSION = "0.1.0-beta.10"
+local VERSION = "0.1.0.13"
 local LOAD_SETTLE_SECONDS, AURA_QUIET_SECONDS, MAX_APPLICATION_AGE = 5, 1, 5
 local DEFAULT_DELAY = 5
+local MOVEMENT_WAIT_SECONDS = 10
 local POSITIVE_EMOTES = {"SALUTE", "BOW", "WAVE", "CHEER", "APPLAUD"}
 local messages = {
     "Ayyy, that is nice! Appreciate you and your buffs!",
@@ -87,18 +88,24 @@ local function IsGroupCaster(guid)
     local partyCount = type(GetNumPartyMembers) == "function" and GetNumPartyMembers() or 0
     local raidCount = type(GetNumRaidMembers) == "function" and GetNumRaidMembers() or 0
     local i
+    local function Matches(unit)
+        local ok, member = pcall(UnitGUID, unit)
+        -- Do not risk whispering a group member when membership is hidden.
+        if not ok or not Readable(member) then return true end
+        return member == guid
+    end
     for i = 1, partyCount do
-        if UnitGUID("party" .. i) == guid then return true end
+        if Matches("party" .. i) then return true end
     end
     for i = 1, raidCount do
-        if UnitGUID("raid" .. i) == guid then return true end
+        if Matches("raid" .. i) then return true end
     end
     if partyCount == 0 and raidCount == 0 and type(GetNumGroupMembers) == "function" then
         local count = GetNumGroupMembers()
         local raid = type(IsInRaid) == "function" and IsInRaid()
         local prefix = raid and "raid" or "party"
         for i = 1, count do
-            if UnitGUID(prefix .. i) == guid then return true end
+            if Matches(prefix .. i) then return true end
         end
     end
     return false
@@ -133,12 +140,23 @@ local function ChooseEmote()
     return lastEmote
 end
 
+local function StandingStill()
+    if type(GetUnitSpeed) ~= "function" then return false end
+    local ok, speed = pcall(GetUnitSpeed, "player")
+    if not ok or not Readable(speed) or type(speed) ~= "number" or speed ~= 0 then return false end
+    if type(IsFalling) == "function" then
+        local got, falling = pcall(IsFalling, "player")
+        if not got or not Readable(falling) or falling then return false end
+    end
+    return true
+end
+
 local function SendThanks(name, spell, emoteName)
     if db.channel == "EMOTE" then
         local emote = C_ChatInfo and C_ChatInfo.PerformEmote
         if type(emote) == "function" then
             -- Like Blizzard's chat UI, interpret the return as "restricted".
-            local ok, restricted = pcall(emote, ChooseEmote(), emoteName)
+            local ok, restricted = pcall(emote, ChooseEmote(), emoteName, true)
             return ok and Readable(restricted) and not restricted
         end
         -- Older DoEmote return values differ; count only the API request.
@@ -163,13 +181,29 @@ local function Queue(guid, spell, spellId)
     local emoteName = name
     if type(realm) == "string" and realm ~= "" then name = name .. "-" .. realm end
     local ticket = generation
+    local deadline = now + db.delay + MOVEMENT_WAIT_SECONDS
     pending[guid] = true
-    C_Timer.After(db.delay, function()
+    local function Attempt()
         if ticket ~= generation then return end
-        pending[guid] = nil
-        if not inWorld or settling or not ready or ShouldSkip(guid)
-            or InCombatLockdown() then return end
+        if not inWorld or settling or not ready or ShouldSkip(guid) then
+            pending[guid] = nil
+            return
+        end
         local time = GetTime()
+        if db.channel == "EMOTE" and time > deadline then
+            pending[guid] = nil
+            return
+        end
+        if db.channel == "EMOTE" and not StandingStill() then
+            if time < deadline then
+                C_Timer.After(math.min(0.5, deadline - time), Attempt)
+            else
+                pending[guid] = nil
+                if db.debug then Say("Emote expired while moving or movement was unreadable.") end
+            end
+            return
+        end
+        pending[guid] = nil
         -- Cap bursts from multiple players as well as repeated buffs from one player.
         if time - lastAttempt < 3 then return end
         if lastSent[guid] and time - lastSent[guid] < db.cooldown then return end
@@ -182,15 +216,17 @@ local function Queue(guid, spell, spellId)
             failures = failures + 1
             Say(db.channel .. " unavailable or blocked by the client. /ft status shows diagnostics.")
         end
-    end)
+    end
+    C_Timer.After(db.delay, Attempt)
 end
 
 local function Scan(baseline)
     if not db or not Available() then return end
     if not inWorld then ready = false; return end
-    if InCombatLockdown() then ready = false; return end
-    local mine = UnitGUID("player")
-    if not Readable(mine) or type(mine) ~= "string" then ready = false; return end
+    local gotMine, mine = pcall(UnitGUID, "player")
+    if not gotMine or not Readable(mine) or type(mine) ~= "string" then
+        ready = false; CancelPending(); return
+    end
     local current, candidates = {}, {}
     local now = GetTime()
     for index = 1, 255 do
@@ -200,6 +236,7 @@ local function Scan(baseline)
         end
         if not aura then break end
         local id, duration, expires, spellId = aura.auraInstanceID, aura.duration, aura.expirationTime, aura.spellId
+        if not Readable(spellId) then spellId = nil end
         if not Readable(id) or not Readable(duration) or not Readable(expires) then
             restricted = restricted + 1; ready = false; CancelPending(); return
         end
@@ -258,26 +295,70 @@ local function EnterWorld()
 end
 
 local function CreateMinimapButton()
+    if not db or not db.showMinimap then return end
     local minimap = Minimap or MinimapCluster
     if minimapButton or not minimap then return end
     minimapButton = CreateFrame("Button", "ForeverThanksMinimapButton", minimap)
     minimapButton:SetWidth(32)
     minimapButton:SetHeight(32)
     minimapButton:SetFrameStrata("MEDIUM")
-    minimapButton:SetPoint("TOPRIGHT", minimap, "TOPRIGHT", -4, -4)
-    minimapButton:SetNormalTexture("Interface\\AddOns\\forever_thanks\\icon")
+    minimapButton:SetFrameLevel(minimap:GetFrameLevel() + 10)
+    minimapButton:SetNormalTexture("Interface\\AddOns\\forever_thanks\\minimap.tga")
+    local icon = minimapButton:GetNormalTexture()
+    icon:ClearAllPoints()
+    icon:SetPoint("CENTER", minimapButton, "CENTER", 0, 0)
+    icon:SetWidth(24)
+    icon:SetHeight(24)
     minimapButton:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
+    local function Position()
+        local angle = db.minimapAngle
+        if type(angle) ~= "number" or angle ~= angle then angle = math.pi * 1.25 end
+        minimapButton:ClearAllPoints()
+        minimapButton:SetPoint("CENTER", minimap, "CENTER",
+            (minimap:GetWidth() / 2 + 8) * math.cos(angle),
+            (minimap:GetHeight() / 2 + 8) * math.sin(angle))
+    end
+    minimapButton:RegisterForClicks("LeftButtonUp")
+    minimapButton:RegisterForDrag("LeftButton")
+    minimapButton:SetScript("OnDragStart", function()
+        GameTooltip:Hide()
+        minimapButton:SetScript("OnUpdate", function()
+            local x, y = GetCursorPosition()
+            local cx, cy = minimap:GetCenter()
+            if not cx or not cy then return end
+            local scale = minimap:GetEffectiveScale()
+            db.minimapAngle = math.atan2(y / scale - cy, x / scale - cx)
+            Position()
+        end)
+    end)
+    minimapButton:SetScript("OnDragStop", function()
+        minimapButton:SetScript("OnUpdate", nil)
+    end)
     minimapButton:SetScript("OnClick", function()
         if OpenForeverThanksOptions then OpenForeverThanksOptions() end
     end)
     minimapButton:SetScript("OnEnter", function(button)
-        GameTooltip:SetOwner(button, "ANCHOR_LEFT")
+        GameTooltip:SetOwner(button or this, "ANCHOR_LEFT")
         GameTooltip:SetText("Forever Thanks")
         GameTooltip:AddLine("Click to open options.", 1, 1, 1)
+        GameTooltip:AddLine("Drag to move around the minimap.", 1, 1, 1)
         GameTooltip:Show()
     end)
     minimapButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    Position()
     minimapButton:Show()
+end
+
+local function UpdateMinimapVisibility()
+    if not db then return end
+    if db.showMinimap then
+        CreateMinimapButton()
+        if minimapButton then minimapButton:Show() end
+    elseif minimapButton then
+        minimapButton:SetScript("OnUpdate", nil)
+        if GameTooltip then GameTooltip:Hide() end
+        minimapButton:Hide()
+    end
 end
 
 frame:SetScript("OnEvent", function(_, event, arg)
@@ -293,22 +374,21 @@ frame:SetScript("OnEvent", function(_, event, arg)
         if type(db.delay) ~= "number" or db.delay ~= db.delay then db.delay = DEFAULT_DELAY end
         db.delay = math.max(0, math.min(60, db.delay))
         if type(db.ignoredBuffs) ~= "table" then db.ignoredBuffs = {} end
-        CreateMinimapButton()
+        if type(db.showMinimap) ~= "boolean" then db.showMinimap = true end
+        UpdateMinimapVisibility()
         if type(db.cooldown) ~= "number" or db.cooldown ~= db.cooldown then db.cooldown = 60 end
         db.cooldown = math.max(30, math.min(3600, db.cooldown))
         if type(db.message) ~= "string" or db.message == "" or #db.message > 200 then db.message = nil end
         if not Available() then Say("Required Forever APIs are missing; automatic thanks is inactive.") end
         Say(VERSION .. " loaded. /ft status or /ft help.")
     elseif event == "PLAYER_ENTERING_WORLD" then
+        UpdateMinimapVisibility()
         EnterWorld()
-    elseif event == "PLAYER_REGEN_ENABLED" then
-        Baseline()
+    elseif event == "PLAYER_REGEN_ENABLED" or event == "PLAYER_REGEN_DISABLED" then
+        Scan(false)
     elseif event == "PLAYER_LEAVING_WORLD" then
         inWorld, settling, ready = false, true, false
         worldGeneration = worldGeneration + 1
-        CancelPending()
-    elseif event == "PLAYER_REGEN_DISABLED" then
-        ready = false
         CancelPending()
     elseif event == "UNIT_AURA" and Readable(arg) and arg == "player" then
         if not inWorld then return end
@@ -376,6 +456,10 @@ SlashCmdList.FOREVERTHANKS = function(input)
         else Say("Use /ft ignore add|remove|list|clear <spell name or spell ID>.") end
     elseif cmd == "gui" or cmd == "options" then
         if OpenForeverThanksOptions then OpenForeverThanksOptions() end
+    elseif cmd == "minimap" and (rest == "on" or rest == "off") then
+        db.showMinimap = rest == "on"
+        UpdateMinimapVisibility()
+        Say("Minimap button: " .. rest .. ". Settings remain available with /ft gui.")
     elseif cmd == "cooldown" then
         local seconds = tonumber(rest)
         if seconds and seconds >= 30 and seconds <= 3600 then
@@ -396,17 +480,24 @@ SlashCmdList.FOREVERTHANKS = function(input)
             .. "; " .. (settling and "settling after loading" or (ready and "watching" or "waiting for safe baseline")) .. ".")
         Say("Buff duration >120s; cooldown " .. db.cooldown .. "s; groups " .. (db.groups and "on" or "off") .. ".")
         Say("Channel: " .. db.channel:lower() .. ", delay " .. db.delay .. "s. This login: chat requests=" .. sent .. ", send errors=" .. failures .. ", restricted scans=" .. restricted .. ".")
-        Say("Out of combat only. Existing buffs on login/zoning/combat exit are ignored.")
+        Say("Combat replies allowed when client data is readable; emotes wait up to 10s for movement to stop. Minimap: " .. (db.showMinimap and "on" or "off") .. ".")
         Say("After loading: 5s minimum, then 1s without aura updates. Applications older than 5s are skipped.")
     else
         Say("/ft on | off | status | preview | debug | gui")
         Say("/ft mode whisper | emote (default: whisper)")
         Say("/ft groups on|off ; /ft groupwhisper on|off ; /ft cooldown 60 ; /ft delay 5")
         Say("/ft emotes thank|random ; /ft ignore add|remove|list|clear <name or ID>")
+        Say("/ft minimap on|off")
     end
 end
 
 local optionsFrame
+local updatingOptions = false
+
+local function UpdateOptionsStatus()
+    optionsFrame.status:SetText("Saved automatically. Current mode: " .. db.channel:lower()
+        .. "; delay: " .. db.delay .. "s; cooldown: " .. db.cooldown .. "s.")
+end
 
 local function OptionsLabel(parent, text, x, y, width)
     local label = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -460,26 +551,53 @@ local function RefreshOptions()
     optionsFrame.grouped:SetChecked(db.groups)
     optionsFrame.groupWhisper:SetChecked(db.skipGroupWhispers)
     optionsFrame.randomEmotes:SetChecked(db.emoteStyle == "RANDOM")
+    optionsFrame.showMinimap:SetChecked(db.showMinimap)
+    updatingOptions = true
     optionsFrame.delay:SetText(tostring(db.delay))
     optionsFrame.cooldown:SetText(tostring(db.cooldown))
+    updatingOptions = false
     optionsFrame.message:SetText(db.message or "")
     optionsFrame.modeText:SetText("Mode: " .. db.channel:lower())
-    optionsFrame.status:SetText("Saved automatically. Current mode: " .. db.channel:lower()
-        .. "; delay: " .. db.delay .. "s; cooldown: " .. db.cooldown .. "s.")
+    UpdateOptionsStatus()
     local ignored = SortedIgnoredBuffs()
     optionsFrame.ignoreList:SetText(#ignored == 0 and "Ignored buffs: none" or "Ignored buffs: " .. table.concat(ignored, ", "))
 end
 
-local function CommitOptionsNumber(edit, minimum, maximum, field, label)
+local function CommitOptionsNumber(edit, minimum, maximum, field, label, finished)
+    if updatingOptions then return end
+    edit = edit or this
     local value = tonumber(edit:GetText())
-    if not value or value < minimum or value > maximum then
-        RefreshOptions()
+    if not value or value ~= value or value < minimum or value > maximum then
+        -- Allow incomplete numbers while typing; restore only this field on exit.
+        if not finished then return end
         Say("Use " .. minimum .. "-" .. maximum .. " for " .. label .. ".")
-        return
+    else
+        value = field == "delay" and math.floor(value * 10 + 0.5) / 10 or math.floor(value)
+        if db[field] ~= value then
+            db[field] = value
+            CancelPending()
+        end
+        UpdateOptionsStatus()
     end
-    db[field] = field == "delay" and math.floor(value * 10 + 0.5) / 10 or math.floor(value)
-    CancelPending()
-    RefreshOptions()
+    if finished then
+        updatingOptions = true
+        edit:SetText(tostring(db[field]))
+        updatingOptions = false
+    end
+end
+
+local function BindOptionsNumber(edit, minimum, maximum, field, label)
+    edit:SetScript("OnTextChanged", function(self)
+        CommitOptionsNumber(self, minimum, maximum, field, label, false)
+    end)
+    edit:SetScript("OnEditFocusLost", function(self)
+        CommitOptionsNumber(self, minimum, maximum, field, label, true)
+    end)
+    edit:SetScript("OnEnterPressed", function(self)
+        self = self or this
+        CommitOptionsNumber(self, minimum, maximum, field, label, true)
+        self:ClearFocus()
+    end)
 end
 
 local function CreateOptions()
@@ -554,16 +672,10 @@ local function CreateOptions()
 
     OptionsLabel(f, "Reply delay (seconds)", 20, -266, 170)
     f.delay = OptionsEdit(f, 190, -258, 70, 24)
-    f.delay:SetScript("OnEnterPressed", function(edit)
-        CommitOptionsNumber(edit, 0, 60, "delay", "delay")
-        edit:ClearFocus()
-    end)
+    BindOptionsNumber(f.delay, 0, 60, "delay", "delay")
     OptionsLabel(f, "Cooldown per caster (seconds)", 280, -266, 170)
     f.cooldown = OptionsEdit(f, 450, -258, 35, 24)
-    f.cooldown:SetScript("OnEnterPressed", function(edit)
-        CommitOptionsNumber(edit, 30, 3600, "cooldown", "cooldown")
-        edit:ClearFocus()
-    end)
+    BindOptionsNumber(f.cooldown, 30, 3600, "cooldown", "cooldown")
 
     OptionsLabel(f, "Custom whisper (leave blank for rotating replies; %s = buff name)", 20, -306, 450)
     f.message = OptionsEdit(f, 20, -330, 350, 24)
@@ -599,6 +711,13 @@ local function CreateOptions()
     f.ignoreList = OptionsLabel(f, "", 20, -432, 465)
     f.ignoreList:SetHeight(55)
 
+    f.showMinimap = OptionsCheck(f, "Show minimap button", 20, -486, function(button)
+        button = button or this
+        db.showMinimap = button:GetChecked() and true or false
+        UpdateMinimapVisibility()
+        RefreshOptions()
+    end)
+
     OptionsButton(f, "Reset defaults", 20, -520, 120, 26, function()
         db.enabled = true
         db.channel = "WHISPER"
@@ -609,12 +728,18 @@ local function CreateOptions()
         db.cooldown = 60
         db.message = nil
         db.ignoredBuffs = {}
+        db.showMinimap = true
+        UpdateMinimapVisibility()
         CancelPending()
         Baseline()
         RefreshOptions()
     end)
     OptionsButton(f, "Close", 385, -520, 100, 26, function() f:Hide() end)
     f:SetScript("OnShow", RefreshOptions)
+    f:SetScript("OnHide", function()
+        CommitOptionsNumber(f.delay, 0, 60, "delay", "delay", true)
+        CommitOptionsNumber(f.cooldown, 30, 3600, "cooldown", "cooldown", true)
+    end)
     return f
 end
 

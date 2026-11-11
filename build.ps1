@@ -8,7 +8,7 @@ if (Test-Path -LiteralPath $zipPath) { throw "Package already exists: $zipPath" 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip = [System.IO.Compression.ZipFile]::Open($zipPath, 'Create')
 try {
-    foreach ($name in @('forever_thanks.toc', 'forever_thanks.lua', 'README.md', 'CHANGELOG.md', 'icon.png')) {
+    foreach ($name in @('forever_thanks.toc', 'forever_thanks.lua', 'README.md', 'CHANGELOG.md', 'icon.png', 'minimap.tga')) {
         [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, (Join-Path $PSScriptRoot $name), "forever_thanks/$name") | Out-Null
     }
 } finally { $zip.Dispose() }

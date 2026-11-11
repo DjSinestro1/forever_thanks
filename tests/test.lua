@@ -16,6 +16,12 @@ local function harness(saved)
     end
     env.GetTime = function() return h.now end
     env.InCombatLockdown = function() return h.combat end
+    env.GetUnitSpeed = function(unit)
+        eq(unit, "player")
+        if h.speedError then error("restricted") end
+        return h.speed or 0
+    end
+    env.IsFalling = function() return h.falling or false end
     env.IsInInstance = function() return not h.outdoors end
     env.ChatFrameUtil = {OpenChat = function(text) h.draft = text end}
     env.IsInGroup = function() return h.grouped end
@@ -39,8 +45,8 @@ local function harness(saved)
         if h.sendError then error("blocked") end
         h.sent[#h.sent + 1] = {text = text, channel = channel, recipient = recipient}
     end}
-    env.C_ChatInfo.PerformEmote = function(token, target)
-        h.emotes[#h.emotes + 1] = {token = token, target = target}
+    env.C_ChatInfo.PerformEmote = function(token, target, suppressMoveError)
+        h.emotes[#h.emotes + 1] = {token = token, target = target, suppressMoveError = suppressMoveError}
         if h.emoteError then error("blocked") end
         if h.emoteReturnNil then return nil end
         return h.emoteRejected or false
@@ -118,11 +124,36 @@ end)
 test("global burst guard across different casters", function()
     local h = active(); h:add(1, 3600, "Player-A"); h:add(2, 3600, "Player-B"); h:change(); h:advance(1); eq(#h.sent, 1)
 end)
-test("combat cancels pending, ignores combat buffs and rebaselines", function()
-    local h = active(); h:add(1, 3600); h:change(); h.combat = true; h:event("PLAYER_REGEN_DISABLED")
-    h:add(2, 3600, "Player-Other"); h:change(); h:advance(1); eq(#h.sent, 0)
-    h.combat = false; h:event("PLAYER_REGEN_ENABLED"); h:change(); h:advance(1); eq(#h.sent, 0)
-    h:add(3, 3600, "Player-New"); h:change(); h:advance(1); eq(#h.sent, 1)
+test("both modes preserve queued replies on combat entry and thank new combat buffs", function()
+    for _, mode in ipairs({"WHISPER", "EMOTE"}) do
+        local h = active({channel = mode})
+        h:add(1, 3600); h:change(); h.combat = true; h:event("PLAYER_REGEN_DISABLED")
+        h:advance(1); eq(#h.sent + #h.emotes, 1)
+        h:advance(4); h:add(2, 3600, "Player-Other"); h:change()
+        h:advance(1); eq(#h.sent + #h.emotes, 2)
+        h.combat = false; h:event("PLAYER_REGEN_ENABLED"); h:change(); h:advance(1)
+        eq(#h.sent + #h.emotes, 2)
+    end
+end)
+
+test("combat exit does not discard a pending reply", function()
+    for _, mode in ipairs({"WHISPER", "EMOTE"}) do
+        local h = active({channel = mode})
+        h.combat = true; h:event("PLAYER_REGEN_DISABLED")
+        h:add(1, 3600); h:change(); h.combat = false; h:event("PLAYER_REGEN_ENABLED")
+        h:advance(1); eq(#h.sent + #h.emotes, 1)
+    end
+end)
+
+test("unreadable combat data cancels pending and is silently baselined when readable", function()
+    for _, mode in ipairs({"WHISPER", "EMOTE"}) do
+        local h = active({channel = mode})
+        h:add(1, 3600); h:change(); h.combat = true; h.readError = true
+        h:event("PLAYER_REGEN_DISABLED"); h:advance(1); eq(#h.sent + #h.emotes, 0)
+        h:add(2, 3600); h:change(); h.combat = false; h.readError = false
+        h:event("PLAYER_REGEN_ENABLED"); h:advance(1); eq(#h.sent + #h.emotes, 0)
+        h:add(3, 3600); h:change(); h:advance(1); eq(#h.sent + #h.emotes, 1)
+    end
 end)
 test("zoning cancels pending", function()
     local h = active(); h:add(1, 3600); h:change(); h:event("PLAYER_LEAVING_WORLD")
@@ -245,12 +276,9 @@ test("mode changes cancel pending replies without resetting cooldown", function(
     h:add(2, 3600); h:change(); h:advance(1); eq(#h.emotes, 1)
     h:cmd("mode whisper"); h:add(3, 3600); h:change(); h:advance(1); eq(#h.sent, 0)
 end)
-test("emote combat and disable cancel queued replies", function()
-    for _, event in ipairs({"PLAYER_REGEN_DISABLED", "off"}) do
-        local h = active({channel = "EMOTE"}); h:add(1, 3600); h:change()
-        if event == "off" then h:cmd(event) else h.combat = true; h:event(event) end
-        h:advance(1); eq(#h.emotes, 0); eq(#h.sent, 0)
-    end
+test("disable still cancels queued emotes", function()
+    local h = active({channel = "EMOTE"}); h:add(1, 3600); h:change(); h:cmd("off")
+    h:advance(1); eq(#h.emotes, 0); eq(#h.sent, 0)
 end)
 test("emote restricted=true and thrown errors are counted without retry or whisper fallback", function()
     for _, flag in ipairs({"emoteRejected", "emoteError"}) do
@@ -286,6 +314,72 @@ test("nil emote restriction flag is not reported as blocked", function()
     local h = active({channel = "EMOTE"}); h.emoteReturnNil = true
     h:add(1, 3600); h:change(); h:advance(1); h:cmd("status")
     eq(#h.emotes, 1); assert(table.concat(h.output):find("send errors=0", 1, true))
+end)
+
+test("moving emotes wait until stopped, retaining the caster and random style", function()
+    for _, style in ipairs({"THANK", "RANDOM"}) do
+        local h = active({channel = "EMOTE", emoteStyle = style})
+        h:add(1, 3600); h:change(); h.speed = 7 -- Movement begins during the reply delay.
+        h:advance(3); eq(#h.emotes, 0)
+        h.casterName = "Somebody Else"; h.speed = 0; h:advance(0.5)
+        eq(#h.emotes, 1); eq(h.emotes[1].target, "BuffFriend")
+        eq(h.emotes[1].suppressMoveError, true)
+        if style == "THANK" then eq(h.emotes[1].token, "THANK") end
+        h:change(); h:advance(20); eq(#h.emotes, 1)
+    end
+end)
+
+test("movement wait expires without a late emote or consuming the caster cooldown", function()
+    local h = active({channel = "EMOTE"}); h.speed = 7
+    h:add(1, 3600); h:change(); h:advance(12); eq(#h.emotes, 0); eq(#h.tasks, 0)
+    h.speed = 0; h:advance(1); eq(#h.emotes, 0)
+    h:add(2, 3600); h:change(); h:advance(1); eq(#h.emotes, 1)
+end)
+
+test("a delayed timer cannot send a stale emote after the movement deadline", function()
+    local h = active({channel = "EMOTE"}); h.speed = 7
+    h:add(1, 3600); h:change(); h:advance(1)
+    local task = table.remove(h.tasks, 1)
+    h.now = h.now + 11; h.speed = 0; task[2]()
+    eq(#h.emotes, 0); eq(#h.tasks, 0)
+end)
+
+test("falling and missing, secret, or thrown movement reads never select an emote", function()
+    for _, kind in ipairs({"falling", "missing", "secret", "error"}) do
+        local h = active({channel = "EMOTE", emoteStyle = "RANDOM"})
+        if kind == "falling" then h.falling = true
+        elseif kind == "missing" then h.env.GetUnitSpeed = nil
+        elseif kind == "secret" then h.speed = {secret = true}
+        else h.speedError = true end
+        h:add(1, 3600); h:change(); h:advance(12)
+        eq(#h.emotes, 0); eq(#h.tasks, 0)
+    end
+end)
+
+test("whispers ignore movement and send during combat", function()
+    local h = active(); h.speed = 7; h.falling = true; h.combat = true
+    h:event("PLAYER_REGEN_DISABLED"); h:add(1, 3600); h:change(); h:advance(1)
+    eq(#h.sent, 1); eq(h.sent[1].recipient, "BuffFriend-Realm")
+end)
+
+test("movement wait respects combat transitions, cancellation, and per-caster coalescing", function()
+    local h = active({channel = "EMOTE"}); h.speed = 7
+    h:add(1, 3600); h:change(); h:advance(1)
+    h:add(2, 3600); h:change(); h.combat = true; h:event("PLAYER_REGEN_DISABLED")
+    h.speed = 0; h:advance(0.5); eq(#h.emotes, 1)
+    for _, cancel in ipairs({"off", "mode whisper", "zone"}) do
+        h = active({channel = "EMOTE"}); h.speed = 7
+        h:add(1, 3600); h:change(); h:advance(2)
+        if cancel == "zone" then h:event("PLAYER_LEAVING_WORLD") else h:cmd(cancel) end
+        h.speed = 0; h:advance(12); eq(#h.emotes, 0); eq(#h.sent, 0)
+    end
+end)
+
+test("secret player and group GUIDs are handled safely during combat", function()
+    local h = active({skipGroupWhispers = true}); h.combat = true
+    h.party = {secret = true}; h:add(1, 3600); h:change(); h:advance(1); eq(#h.sent, 0)
+    h.env.UnitGUID = function() return {secret = true} end
+    h:change(); h:advance(1); eq(#h.sent, 0)
 end)
 for _, mode in ipairs({"EMOTE", "WHISPER"}) do
     local function replies(h) return #h.sent + #h.emotes end
@@ -358,3 +452,5 @@ for _, item in ipairs(tests) do
     item[2](); passed = passed + 1; print("PASS " .. item[1])
 end
 print(passed .. " tests passed")
+dofile("tests/minimap.lua")("forever_thanks")
+dofile("tests/options.lua")("forever_thanks")

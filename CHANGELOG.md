@@ -1,3 +1,26 @@
+# 0.1.0.13
+
+- Allows whisper and emote attempts during combat when the client exposes readable buff and caster data.
+- Preserves queued replies when entering or leaving combat; unreadable data and client restrictions still fail safely.
+- Waits for the player to stop moving or falling before selecting an emote. Replies expire after 10 extra seconds if movement continues or cannot be read.
+- Keeps whispers on the normal configured delay regardless of movement.
+- Adds a saved Show minimap button checkbox in the options window, plus `/ft minimap on` and `/ft minimap off`. Options remain accessible through `/ft gui`.
+- Adds regression tests for combat replies, movement waits and expiry, hidden data, and saved minimap visibility.
+
+# 0.1.0-beta.12
+
+- Fixes reply delay and per-caster cooldown reverting after editing the options window without pressing Enter.
+- Saves valid numbers as they are typed, including when another control is clicked or the window is closed.
+- Invalid entries restore the last valid value without clearing the other field.
+- Adds options-window regression tests for saving, validation, reset, and reloading saved settings.
+
+# 0.1.0-beta.11
+
+- Fixes the black minimap icon using a 128x128 TGA texture of the blue Thank You artwork with the golden heart.
+- Places the button on the minimap's outer edge and above map artwork.
+- Adds dragging around the minimap, with the position saved between sessions.
+- Handles minimap creation after loading and legacy tooltip callbacks.
+
 # 0.1.0-beta.10
 
 - Fixes the options window on ForeverWoW clients without the newer `SetBackdrop` API by using a compatible background texture fallback.
