@@ -1,3 +1,10 @@
+# 0.1.0.14
+
+- Adds `{name}` to custom whispers for the buff caster's name, alongside `%s` for the buff name. Example: `Thank you {name} for the %s!`.
+- Raises the minimum qualifying buff duration to strictly more than five minutes (300 seconds), for both whispers and emotes.
+- Ignores talented three-minute Battle Shout and buffs lasting exactly five minutes.
+- Updates the options hint, message confirmation, preview, status output, and documentation.
+
 # 0.1.0.13
 
 - Allows whisper and emote attempts during combat when the client exposes readable buff and caster data.

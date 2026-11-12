@@ -5,8 +5,9 @@ Friendly automatic thank-you whispers and targeted `/thank`-style emotes for
 
 ## Features
 
-- Thanks players for newly applied or refreshed helpful buffs whose reported duration is **strictly greater than 120 seconds**.
+- Thanks players for newly applied or refreshed helpful buffs whose reported duration is **strictly greater than five minutes (300 seconds)**. Three-minute Battle Shout and buffs lasting exactly five minutes are ignored.
 - Uses 28 varied thank-you messages and avoids repeating the same reply twice in a row.
+- Supports custom whispers with `{name}` for the buff caster's character name and `%s` for the buff name.
 - Sends a private whisper by default, or a targeted emote without requiring the buff caster to be selected.
 - Waits five seconds after detecting a qualifying buff before replying.
 - Supports fixed `THANK` emotes or random positive emotes such as Salute, Bow, Wave, Cheer, and Applaud.
@@ -51,7 +52,7 @@ Uncheck **Show minimap button** to hide the button. This choice is saved across 
 | `/ft groups on` / `/ft groups off` | Allow or suppress all thanks while grouped |
 | `/ft groupwhisper on` / `/ft groupwhisper off` | Allow or suppress whispers to party/raid buff casters |
 | `/ft emotes thank` / `/ft emotes random` | Choose fixed THANK or random positive emotes |
-| `/ft message Thanks for %s!` | Set a custom whisper; `%s` becomes the buff name |
+| `/ft message Thank you {name} for the %s!` | Set a custom whisper; `{name}` becomes the caster's name and `%s` becomes the buff name |
 | `/ft message random` | Restore the 28 rotating messages |
 | `/ft ignore add <name or ID>` | Add a buff to the ignore list |
 | `/ft ignore remove <name or ID>` | Remove a buff from the ignore list |
@@ -61,6 +62,8 @@ Uncheck **Show minimap button** to hide the button. This choice is saved across 
 | `/ft debug` | Toggle local chat-attempt diagnostics |
 
 `/foreverthanks` and `/forever_thanks` are aliases for `/ft`.
+
+For example, `Thank you {name} for the %s!` becomes `Thank you Steamboots for the Blessing of Might!`. This works in the custom-whisper field in `/ft gui` as well as with the message command. Use `/ft preview` to check it locally with example names.
 
 ## Important behavior
 

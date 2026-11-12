@@ -96,12 +96,26 @@ test("nil sourceUnit resolves caster and delayed realm-qualified whisper", funct
     local h = active({channel = "WHISPER"}); h:add(1, 3600); h:change(); eq(#h.sent, 0)
     h:advance(1); eq(#h.sent, 1); eq(h.sent[1].recipient, "BuffFriend-Realm"); eq(h.sent[1].channel, "WHISPER")
 end)
-test("strict two-minute boundary; short, permanent, missing duration ignored", function()
-    for _, duration in ipairs({0, 15, 119, 120}) do
-        local h = active(); h:add(1, duration); h:change(); h:advance(1); eq(#h.sent, 0)
+test("strict five-minute boundary in both modes; short, permanent, missing duration ignored", function()
+    for _, mode in ipairs({"WHISPER", "EMOTE"}) do
+        for _, duration in ipairs({0, 15, 119, 120, 121, 180, 299, 300, 301}) do
+            local h = active({channel = mode}); h:add(1, duration); h:change(); h:advance(1)
+            eq(#h.sent + #h.emotes, duration > 300 and 1 or 0)
+        end
+        local h = active({channel = mode}); h:add(1, 301).duration = nil
+        h:change(); h:advance(1); eq(#h.sent + #h.emotes, 0)
     end
-    local h = active(); h:add(1, 121).duration = nil; h:change(); h:advance(1); eq(#h.sent, 0)
-    h = active(); h:add(1, 121); h:change(); h:advance(1); eq(#h.sent, 1)
+end)
+
+test("talented three-minute Battle Shout never thanks the warrior on repeated refreshes", function()
+    for _, mode in ipairs({"WHISPER", "EMOTE"}) do
+        local h = active({channel = mode})
+        local buff = h:add(1, 180, "Player-Warrior", "Battle Shout")
+        for i = 1, 5 do
+            buff.expirationTime = h.now + 180; h:change(); h:advance(180)
+        end
+        eq(#h.sent + #h.emotes, 0)
+    end
 end)
 test("self, NPC, unknown GUID excluded", function()
     for _, guid in ipairs({"Player-Self", "Creature-123", ""}) do
@@ -181,6 +195,28 @@ test("custom message literal percent handling; preview never sends", function()
     local h = active(); h:cmd("message Thanks for %s! 100% appreciated."); h:cmd("preview"); eq(#h.sent, 0)
     h:add(1, 3600); h:change(); h:advance(1); eq(h.sent[1].text, "Thanks for Blessing of Might! 100% appreciated.")
     h:cmd("message random"); eq(h.env.ForeverThanksDB.message, nil)
+end)
+
+test("custom whispers expand caster name and buff while retaining the realm-qualified recipient", function()
+    local h = active()
+    h.casterName = "Steamboots"
+    h:cmd("message Thank you {name} for the %s!")
+    h:add(1, 3600); h:change(); h.casterName = "Someone Else"; h:advance(1)
+    eq(h.sent[1].text, "Thank you Steamboots for the Blessing of Might!")
+    eq(h.sent[1].recipient, "Steamboots-Realm")
+end)
+
+test("caster and buff placeholders support repeats, literal percents, preview, and saved custom messages", function()
+    local saved = {message = "{name}, thanks for %s! {name}: %s, 100% appreciated."}
+    local h = active(saved); h.casterName = "Buff Friend"
+    h:cmd("preview"); eq(#h.sent, 0)
+    assert(h.output[#h.output]:find("BuffFriend", 1, true))
+    assert(not h.output[#h.output]:find("{name}", 1, true))
+    h:add(1, 3600, nil, "Power 100%"); h:change(); h:advance(1)
+    eq(h.sent[1].text, "Buff Friend, thanks for Power 100%! Buff Friend: Power 100%, 100% appreciated.")
+    h = active(saved); h.casterName = "Buff Friend"
+    h:add(1, 3600); h:change(); h:advance(1)
+    assert(h.sent[1].text:find("Buff Friend, thanks for Blessing of Might!", 1, true))
 end)
 test("saved settings honored and corrupt defaults normalized", function()
     local h = active({enabled = false, cooldown = 100, groups = false}); h:add(1, 3600); h:change(); h:advance(1); eq(#h.sent, 0)

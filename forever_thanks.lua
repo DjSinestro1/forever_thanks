@@ -1,7 +1,8 @@
 local addonName = ...
-local VERSION = "0.1.0.13"
+local VERSION = "0.1.0.14"
 local LOAD_SETTLE_SECONDS, AURA_QUIET_SECONDS, MAX_APPLICATION_AGE = 5, 1, 5
 local DEFAULT_DELAY = 5
+local MIN_BUFF_DURATION = 300
 local MOVEMENT_WAIT_SECONDS = 10
 local POSITIVE_EMOTES = {"SALUTE", "BOW", "WAVE", "CHEER", "APPLAUD"}
 local messages = {
@@ -120,9 +121,10 @@ local function ShouldSkip(guid)
     return false
 end
 
-local function Message(spell)
+local function Message(spell, casterName)
     if db.message then
-        return (db.message:gsub("%%s", function() return spell end))
+        local text = db.message:gsub("{name}", function() return casterName end)
+        return (text:gsub("%%s", function() return spell end))
     end
     local index = math.random(#messages - (lastMessage and 1 or 0))
     if lastMessage and index >= lastMessage then index = index + 1 end
@@ -163,7 +165,7 @@ local function SendThanks(name, spell, emoteName)
         if type(DoEmote) == "function" then return pcall(DoEmote, ChooseEmote(), emoteName) end
         return false
     end
-    local text = Message(spell)
+    local text = Message(spell, emoteName)
     if #text > 255 then Say("Message too long; shorten /ft message."); return false end
     local send = C_ChatInfo and C_ChatInfo.SendChatMessage or SendChatMessage
     if type(send) ~= "function" then return false end
@@ -247,7 +249,7 @@ local function Scan(baseline)
             -- remaining lifetime is shorter than a newly applied/refreshed buff.
             local age = type(duration) == "number" and now - (current[id] - duration) or math.huge
             if ready and not settling and not baseline and db.enabled and fresh
-                and type(duration) == "number" and duration > 120
+                and type(duration) == "number" and duration > MIN_BUFF_DURATION
                 and current[id] > now and age >= -1 and age <= MAX_APPLICATION_AGE
                 and (db.groups or not IsInGroup()) then
                 local got, guid = pcall(C_UnitAuras.GetAuraCasterGUID, "player", id)
@@ -468,17 +470,17 @@ SlashCmdList.FOREVERTHANKS = function(input)
     elseif cmd == "message" then
         if rest == "random" or rest == "default" then db.message = nil; Say("28 rotating messages enabled.")
         elseif rest ~= "" and #rest <= 200 and not rest:find("[\r\n|]") then
-            db.message = rest; Say("Custom message saved. %s inserts the buff name.")
+            db.message = rest; Say("Custom message saved. {name} inserts the caster name; %s inserts the buff name.")
         else Say("Use /ft message <text, up to 200 bytes> or /ft message random.") end
     elseif cmd == "preview" then
-        Say("Preview only (not sent): " .. Message("Blessing of Might"))
+        Say("Preview only (not sent): " .. Message("Blessing of Might", "BuffFriend"))
     elseif cmd == "debug" then
         db.debug = not db.debug; Say("Debug: " .. (db.debug and "on" or "off"))
     elseif cmd == "status" or cmd == "" then
         Say(VERSION .. "; " .. (db.enabled and "enabled" or "disabled")
             .. "; APIs " .. (Available() and "available" or "missing")
             .. "; " .. (settling and "settling after loading" or (ready and "watching" or "waiting for safe baseline")) .. ".")
-        Say("Buff duration >120s; cooldown " .. db.cooldown .. "s; groups " .. (db.groups and "on" or "off") .. ".")
+        Say("Buff duration >" .. MIN_BUFF_DURATION .. "s; cooldown " .. db.cooldown .. "s; groups " .. (db.groups and "on" or "off") .. ".")
         Say("Channel: " .. db.channel:lower() .. ", delay " .. db.delay .. "s. This login: chat requests=" .. sent .. ", send errors=" .. failures .. ", restricted scans=" .. restricted .. ".")
         Say("Combat replies allowed when client data is readable; emotes wait up to 10s for movement to stop. Minimap: " .. (db.showMinimap and "on" or "off") .. ".")
         Say("After loading: 5s minimum, then 1s without aura updates. Applications older than 5s are skipped.")
@@ -677,7 +679,7 @@ local function CreateOptions()
     f.cooldown = OptionsEdit(f, 450, -258, 35, 24)
     BindOptionsNumber(f.cooldown, 30, 3600, "cooldown", "cooldown")
 
-    OptionsLabel(f, "Custom whisper (leave blank for rotating replies; %s = buff name)", 20, -306, 450)
+    OptionsLabel(f, "Custom whisper: {name} = caster, %s = buff (blank = random)", 20, -306, 450)
     f.message = OptionsEdit(f, 20, -330, 350, 24)
     OptionsButton(f, "Save message", 380, -330, 105, 24, function()
         local text = Trim(f.message:GetText())
