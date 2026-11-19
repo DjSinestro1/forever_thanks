@@ -1,3 +1,17 @@
+# 0.1.0.16
+
+- Adds an optional character-specific custom whisper for roleplay alts and other characters needing different messages.
+- Keeps shared messages as the default and preserves existing custom whispers without migration.
+- Adds a Use a character-specific custom whisper checkbox to `/ft gui`. The scope choice and personal message persist for each character.
+- Keeps shared and character messages separate when switching scopes. A blank slot uses the rotating replies; it does not overwrite the other scope.
+- Adds `/ft messagescope global` and `/ft messagescope character`. Message commands and previews use the selected scope.
+- Leaves all other settings shared. Reset defaults clears only the selected scope's custom message.
+
+# 0.1.0.15
+
+- Adds the existing blue-and-gold heart texture to the game's AddOns list instead of the question-mark fallback.
+- No changes to reply behavior or combat handling.
+
 # 0.1.0.14
 
 - Adds `{name}` to custom whispers for the buff caster's name, alongside `%s` for the buff name. Example: `Thank you {name} for the %s!`.

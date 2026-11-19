@@ -1,5 +1,5 @@
 local addonName = ...
-local VERSION = "0.1.0.14"
+local VERSION = "0.1.0.16"
 local LOAD_SETTLE_SECONDS, AURA_QUIET_SECONDS, MAX_APPLICATION_AGE = 5, 1, 5
 local DEFAULT_DELAY = 5
 local MIN_BUFF_DURATION = 300
@@ -36,7 +36,7 @@ local messages = {
     "Beauty, eh? Thanks a bunch for the buff!",
 }
 local frame = CreateFrame("Frame")
-local db, seen, ready = nil, {}, false
+local db, charDB, seen, ready = nil, nil, {}, false
 local pending, lastSent = {}, {}
 local generation, lastMessage, lastAttempt = 0, nil, -math.huge
 local lastEmote
@@ -121,9 +121,19 @@ local function ShouldSkip(guid)
     return false
 end
 
+local function MessageSettings()
+    return charDB.useCharacterMessage and charDB or db
+end
+
+local function SetMessageScope(character)
+    charDB.useCharacterMessage = character
+    CancelPending()
+end
+
 local function Message(spell, casterName)
-    if db.message then
-        local text = db.message:gsub("{name}", function() return casterName end)
+    local custom = MessageSettings().message
+    if custom then
+        local text = custom:gsub("{name}", function() return casterName end)
         return (text:gsub("%%s", function() return spell end))
     end
     local index = math.random(#messages - (lastMessage and 1 or 0))
@@ -367,6 +377,10 @@ frame:SetScript("OnEvent", function(_, event, arg)
     if event == "ADDON_LOADED" and arg == addonName then
         if type(ForeverThanksDB) ~= "table" then ForeverThanksDB = {} end
         db = ForeverThanksDB
+        if type(ForeverThanksCharDB) ~= "table" then ForeverThanksCharDB = {} end
+        charDB = ForeverThanksCharDB
+        if type(charDB.useCharacterMessage) ~= "boolean" then charDB.useCharacterMessage = false end
+        if type(charDB.message) ~= "string" or charDB.message == "" or #charDB.message > 200 then charDB.message = nil end
         if type(db.enabled) ~= "boolean" then db.enabled = true end
         -- Whisper is the default; preserve only an explicitly selected emote mode.
         if db.channel ~= "EMOTE" then db.channel = "WHISPER" end
@@ -467,10 +481,14 @@ SlashCmdList.FOREVERTHANKS = function(input)
         if seconds and seconds >= 30 and seconds <= 3600 then
             db.cooldown = math.floor(seconds); Say("Per-player cooldown: " .. db.cooldown .. "s.")
         else Say("Use /ft cooldown 30-3600 (default 60 seconds).") end
+    elseif cmd == "messagescope" and (rest == "global" or rest == "character") then
+        SetMessageScope(rest == "character")
+        Say("Custom whisper scope: " .. rest .. ". Existing messages in the other scope are preserved.")
     elseif cmd == "message" then
-        if rest == "random" or rest == "default" then db.message = nil; Say("28 rotating messages enabled.")
+        local settings = MessageSettings()
+        if rest == "random" or rest == "default" then settings.message = nil; Say("28 rotating messages enabled for the selected scope.")
         elseif rest ~= "" and #rest <= 200 and not rest:find("[\r\n|]") then
-            db.message = rest; Say("Custom message saved. {name} inserts the caster name; %s inserts the buff name.")
+            settings.message = rest; Say("Custom message saved for " .. (charDB.useCharacterMessage and "this character" or "all shared-message characters") .. ". {name} inserts the caster name; %s inserts the buff name.")
         else Say("Use /ft message <text, up to 200 bytes> or /ft message random.") end
     elseif cmd == "preview" then
         Say("Preview only (not sent): " .. Message("Blessing of Might", "BuffFriend"))
@@ -481,7 +499,7 @@ SlashCmdList.FOREVERTHANKS = function(input)
             .. "; APIs " .. (Available() and "available" or "missing")
             .. "; " .. (settling and "settling after loading" or (ready and "watching" or "waiting for safe baseline")) .. ".")
         Say("Buff duration >" .. MIN_BUFF_DURATION .. "s; cooldown " .. db.cooldown .. "s; groups " .. (db.groups and "on" or "off") .. ".")
-        Say("Channel: " .. db.channel:lower() .. ", delay " .. db.delay .. "s. This login: chat requests=" .. sent .. ", send errors=" .. failures .. ", restricted scans=" .. restricted .. ".")
+        Say("Channel: " .. db.channel:lower() .. ", delay " .. db.delay .. "s; message scope: " .. (charDB.useCharacterMessage and "character" or "global") .. ". This login: chat requests=" .. sent .. ", send errors=" .. failures .. ", restricted scans=" .. restricted .. ".")
         Say("Combat replies allowed when client data is readable; emotes wait up to 10s for movement to stop. Minimap: " .. (db.showMinimap and "on" or "off") .. ".")
         Say("After loading: 5s minimum, then 1s without aura updates. Applications older than 5s are skipped.")
     else
@@ -490,6 +508,7 @@ SlashCmdList.FOREVERTHANKS = function(input)
         Say("/ft groups on|off ; /ft groupwhisper on|off ; /ft cooldown 60 ; /ft delay 5")
         Say("/ft emotes thank|random ; /ft ignore add|remove|list|clear <name or ID>")
         Say("/ft minimap on|off")
+        Say("/ft messagescope global|character ; /ft message <text>|random")
     end
 end
 
@@ -554,11 +573,13 @@ local function RefreshOptions()
     optionsFrame.groupWhisper:SetChecked(db.skipGroupWhispers)
     optionsFrame.randomEmotes:SetChecked(db.emoteStyle == "RANDOM")
     optionsFrame.showMinimap:SetChecked(db.showMinimap)
+    optionsFrame.characterMessage:SetChecked(charDB.useCharacterMessage)
     updatingOptions = true
     optionsFrame.delay:SetText(tostring(db.delay))
     optionsFrame.cooldown:SetText(tostring(db.cooldown))
     updatingOptions = false
-    optionsFrame.message:SetText(db.message or "")
+    optionsFrame.message:SetText(MessageSettings().message or "")
+    optionsFrame.messageLabel:SetText("Custom whisper (" .. (charDB.useCharacterMessage and "this character" or "shared") .. "): {name} = caster, %s = buff")
     optionsFrame.modeText:SetText("Mode: " .. db.channel:lower())
     UpdateOptionsStatus()
     local ignored = SortedIgnoredBuffs()
@@ -605,7 +626,7 @@ end
 local function CreateOptions()
     local f = CreateFrame("Frame", "ForeverThanksOptions", UIParent)
     f:SetWidth(500)
-    f:SetHeight(610)
+    f:SetHeight(642)
     f:SetPoint("CENTER")
     if f.SetFrameStrata then f:SetFrameStrata("DIALOG") end
     if f.EnableMouse then f:EnableMouse(true) end
@@ -679,48 +700,54 @@ local function CreateOptions()
     f.cooldown = OptionsEdit(f, 450, -258, 35, 24)
     BindOptionsNumber(f.cooldown, 30, 3600, "cooldown", "cooldown")
 
-    OptionsLabel(f, "Custom whisper: {name} = caster, %s = buff (blank = random)", 20, -306, 450)
-    f.message = OptionsEdit(f, 20, -330, 350, 24)
-    OptionsButton(f, "Save message", 380, -330, 105, 24, function()
+    f.characterMessage = OptionsCheck(f, "Use a character-specific custom whisper", 20, -302, function(button)
+        button = button or this
+        SetMessageScope(button:GetChecked() and true or false)
+        RefreshOptions()
+    end)
+    f.messageLabel = OptionsLabel(f, "", 20, -338, 450)
+    f.message = OptionsEdit(f, 20, -362, 350, 24)
+    OptionsButton(f, "Save message", 380, -362, 105, 24, function()
+        local settings = MessageSettings()
         local text = Trim(f.message:GetText())
         if text == "" or text:lower() == "random" or text:lower() == "default" then
-            db.message = nil
+            settings.message = nil
         elseif #text <= 200 and not text:find("[\r\n|]") then
-            db.message = text
+            settings.message = text
         else
             Say("Message must be 1-200 characters and contain no line breaks or |.")
         end
         RefreshOptions()
     end)
 
-    OptionsLabel(f, "Ignored buffs (enter a spell name or spell ID)", 20, -374, 400)
-    f.ignoreInput = OptionsEdit(f, 20, -398, 230, 24)
-    OptionsButton(f, "Add", 260, -398, 65, 24, function()
+    OptionsLabel(f, "Ignored buffs (enter a spell name or spell ID)", 20, -406, 400)
+    f.ignoreInput = OptionsEdit(f, 20, -430, 230, 24)
+    OptionsButton(f, "Add", 260, -430, 65, 24, function()
         local key, label = NormalizeIgnoredBuff(f.ignoreInput:GetText())
         if key then db.ignoredBuffs[key] = label; f.ignoreInput:SetText(""); CancelPending(); RefreshOptions()
         else Say("Enter a spell name or spell ID first.") end
     end)
-    OptionsButton(f, "Remove", 330, -398, 70, 24, function()
+    OptionsButton(f, "Remove", 330, -430, 70, 24, function()
         local key, label = NormalizeIgnoredBuff(f.ignoreInput:GetText())
         if key and db.ignoredBuffs[key] then db.ignoredBuffs[key] = nil; f.ignoreInput:SetText(""); CancelPending(); RefreshOptions()
         else Say("That buff is not in the ignore list.") end
     end)
-    OptionsButton(f, "Clear", 405, -398, 80, 24, function()
+    OptionsButton(f, "Clear", 405, -430, 80, 24, function()
         db.ignoredBuffs = {}
         CancelPending()
         RefreshOptions()
     end)
-    f.ignoreList = OptionsLabel(f, "", 20, -432, 465)
+    f.ignoreList = OptionsLabel(f, "", 20, -464, 465)
     f.ignoreList:SetHeight(55)
 
-    f.showMinimap = OptionsCheck(f, "Show minimap button", 20, -486, function(button)
+    f.showMinimap = OptionsCheck(f, "Show minimap button", 20, -518, function(button)
         button = button or this
         db.showMinimap = button:GetChecked() and true or false
         UpdateMinimapVisibility()
         RefreshOptions()
     end)
 
-    OptionsButton(f, "Reset defaults", 20, -520, 120, 26, function()
+    OptionsButton(f, "Reset defaults", 20, -552, 120, 26, function()
         db.enabled = true
         db.channel = "WHISPER"
         db.groups = true
@@ -728,7 +755,7 @@ local function CreateOptions()
         db.emoteStyle = "THANK"
         db.delay = DEFAULT_DELAY
         db.cooldown = 60
-        db.message = nil
+        MessageSettings().message = nil
         db.ignoredBuffs = {}
         db.showMinimap = true
         UpdateMinimapVisibility()
@@ -736,7 +763,7 @@ local function CreateOptions()
         Baseline()
         RefreshOptions()
     end)
-    OptionsButton(f, "Close", 385, -520, 100, 26, function() f:Hide() end)
+    OptionsButton(f, "Close", 385, -552, 100, 26, function() f:Hide() end)
     f:SetScript("OnShow", RefreshOptions)
     f:SetScript("OnHide", function()
         CommitOptionsNumber(f.delay, 0, 60, "delay", "delay", true)

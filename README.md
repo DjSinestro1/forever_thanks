@@ -8,6 +8,7 @@ Friendly automatic thank-you whispers and targeted `/thank`-style emotes for
 - Thanks players for newly applied or refreshed helpful buffs whose reported duration is **strictly greater than five minutes (300 seconds)**. Three-minute Battle Shout and buffs lasting exactly five minutes are ignored.
 - Uses 28 varied thank-you messages and avoids repeating the same reply twice in a row.
 - Supports custom whispers with `{name}` for the buff caster's character name and `%s` for the buff name.
+- Can save a different custom whisper for each character, or use one shared message. Existing shared messages remain the default.
 - Sends a private whisper by default, or a targeted emote without requiring the buff caster to be selected.
 - Waits five seconds after detecting a qualifying buff before replying.
 - Supports fixed `THANK` emotes or random positive emotes such as Salute, Bow, Wave, Cheer, and Applaud.
@@ -37,6 +38,16 @@ You can also click the blue Thank You heart button on the minimap's outer edge (
 
 Uncheck **Show minimap button** to hide the button. This choice is saved across reloads and logouts. You can always reopen settings with `/ft gui` and show it again.
 
+### Shared or character-specific whispers
+
+Leave **Use a character-specific custom whisper** unchecked to use the shared message. Existing custom whispers keep working this way by default.
+
+To give an alt its own roleplay message, check that option in `/ft gui`, type the character's message, and click **Save message**. That character remembers both the message and the checked option across logouts. Other characters keep their own choice.
+
+Switching the checkbox displays the saved message for that scope without deleting either message. A new character-specific slot starts blank. Saving a blank message uses the rotating replies for the selected scope, rather than the other scope's custom message. **Reset defaults** also clears only the selected scope's message.
+
+Only the custom whisper and its scope choice are character-specific. Modes, cooldowns, reply delays, and the other settings remain shared.
+
 ## Commands
 
 | Command | Action |
@@ -52,8 +63,9 @@ Uncheck **Show minimap button** to hide the button. This choice is saved across 
 | `/ft groups on` / `/ft groups off` | Allow or suppress all thanks while grouped |
 | `/ft groupwhisper on` / `/ft groupwhisper off` | Allow or suppress whispers to party/raid buff casters |
 | `/ft emotes thank` / `/ft emotes random` | Choose fixed THANK or random positive emotes |
+| `/ft messagescope global` / `/ft messagescope character` | Choose the shared or character-specific custom whisper |
 | `/ft message Thank you {name} for the %s!` | Set a custom whisper; `{name}` becomes the caster's name and `%s` becomes the buff name |
-| `/ft message random` | Restore the 28 rotating messages |
+| `/ft message random` | Use the 28 rotating messages in the selected scope |
 | `/ft ignore add <name or ID>` | Add a buff to the ignore list |
 | `/ft ignore remove <name or ID>` | Remove a buff from the ignore list |
 | `/ft ignore list` | Show ignored buffs |
@@ -64,6 +76,8 @@ Uncheck **Show minimap button** to hide the button. This choice is saved across 
 `/foreverthanks` and `/forever_thanks` are aliases for `/ft`.
 
 For example, `Thank you {name} for the %s!` becomes `Thank you Steamboots for the Blessing of Might!`. This works in the custom-whisper field in `/ft gui` as well as with the message command. Use `/ft preview` to check it locally with example names.
+
+The message command, preview, and Save message button all use the currently selected message scope.
 
 ## Important behavior
 

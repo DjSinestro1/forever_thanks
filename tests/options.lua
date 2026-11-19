@@ -3,9 +3,10 @@ return function(addon)
     local savedName = addon == "OctoThanks" and "OctoThanksDB" or "ForeverThanksDB"
     local openName = addon == "OctoThanks" and "OpenOctoThanksOptions" or "OpenForeverThanksOptions"
     local function eq(a, b) assert(a == b, tostring(a) .. " ~= " .. tostring(b)) end
-    local function harness(saved, legacy)
+    local function harness(saved, legacy, character)
         local env = setmetatable({SlashCmdList = {}}, {__index = _G})
         env[savedName] = saved or {}
+        env.ForeverThanksCharDB = character or {}
         env.GetTime = function() return 100 end
         env.print = function() end
         env.DEFAULT_CHAT_FRAME = {AddMessage = function() end}
@@ -91,6 +92,33 @@ return function(addon)
         eq(db.delay, 5); eq(db.cooldown, 60)
         eq(db.showMinimap, true); eq(f.showMinimap:GetChecked(), true)
         f:Hide(); open(); eq(db.delay, 5); eq(db.cooldown, 60)
+        local function click(label)
+            for _, button in ipairs(widgets) do
+                if button.kind == "Button" and button.text == label then button:Fire("OnClick"); return end
+            end
+            error("Missing button: " .. label)
+        end
+        -- The GUI must edit only the displayed scope and preserve both on reload.
+        f.message:SetText("Shared greeting!"); click("Save message")
+        eq(db.message, "Shared greeting!")
+        f.characterMessage:SetChecked(true); f.characterMessage:Fire("OnClick")
+        eq(f.message:GetText(), "")
+        f.message:SetText("In-character thanks, {name}!"); click("Save message")
+        local character = env.ForeverThanksCharDB
+        eq(character.useCharacterMessage, true)
+        eq(character.message, "In-character thanks, {name}!")
+        eq(db.message, "Shared greeting!")
+        local loaded, reopenCharacter = harness(db, legacy, character)
+        local c = reopenCharacter()
+        eq(c.characterMessage:GetChecked(), true)
+        eq(c.message:GetText(), "In-character thanks, {name}!")
+        c.characterMessage:SetChecked(false); c.characterMessage:Fire("OnClick")
+        eq(c.message:GetText(), "Shared greeting!")
+        c.characterMessage:SetChecked(true); c.characterMessage:Fire("OnClick")
+        eq(c.message:GetText(), "In-character thanks, {name}!")
+        f.characterMessage:SetChecked(true); f.characterMessage:Fire("OnClick")
+        click("Reset defaults")
+        eq(db.message, "Shared greeting!"); eq(character.message, nil)
     end
     print("PASS " .. addon .. " GUI autosave, validation, reset, and saved-settings reload (modern/legacy callbacks)")
 end

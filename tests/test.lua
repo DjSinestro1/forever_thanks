@@ -2,13 +2,13 @@
 local tests, passed = {}, 0
 local function test(name, fn) tests[#tests + 1] = {name, fn} end
 local function eq(a, b) assert(a == b, tostring(a) .. " ~= " .. tostring(b)) end
-local function harness(saved)
+local function harness(saved, character)
     saved = saved or {}
     local useDefaultDelay = saved.__defaultDelay
     saved.__defaultDelay = nil
     if not useDefaultDelay and saved.delay == nil then saved.delay = 1 end
     local h = {auras = {}, now = 100, tasks = {}, sent = {}, emotes = {}, output = {}, combat = false, grouped = false}
-    local env = setmetatable({ForeverThanksDB = saved, SlashCmdList = {}}, {__index = _G})
+    local env = setmetatable({ForeverThanksDB = saved, ForeverThanksCharDB = character or {}, SlashCmdList = {}}, {__index = _G})
     env.print = function(text) h.output[#h.output + 1] = text end
     env.issecretvalue = function(v) return type(v) == "table" and v.secret == true end
     env.CreateFrame = function()
@@ -88,8 +88,8 @@ local function harness(saved)
     h.env = env
     return h
 end
-local function active(saved)
-    local h = harness(saved); h:event("PLAYER_ENTERING_WORLD"); h:advance(6); return h
+local function active(saved, character)
+    local h = harness(saved, character); h:event("PLAYER_ENTERING_WORLD"); h:advance(6); return h
 end
 
 test("nil sourceUnit resolves caster and delayed realm-qualified whisper", function()
@@ -223,6 +223,74 @@ test("saved settings honored and corrupt defaults normalized", function()
     h = active({cooldown = "bad", message = 7}); eq(h.env.ForeverThanksDB.cooldown, 60); eq(h.env.ForeverThanksDB.message, nil)
     h:cmd("cooldown 5"); eq(h.env.ForeverThanksDB.cooldown, 60)
     h:cmd("cooldown 90"); eq(h.env.ForeverThanksDB.cooldown, 90)
+end)
+
+test("existing shared messages remain the default and character scope is opt-in", function()
+    local shared = {message = "Shared thanks, {name}!"}
+    local h = active(shared)
+    eq(h.env.ForeverThanksCharDB.useCharacterMessage, false)
+    eq(h.env.ForeverThanksCharDB.message, nil)
+    h:add(1, 3600); h:change(); h:advance(1)
+    eq(h.sent[1].text, "Shared thanks, BuffFriend!")
+    eq(shared.message, "Shared thanks, {name}!")
+end)
+
+test("roleplay alts retain independent messages, shared fallback selection, and placeholders", function()
+    local shared = {message = "Shared thanks!"}
+    local mage, rogue = {}, {}
+    local h = active(shared, mage)
+    h:cmd("messagescope character"); h:cmd("message My arcane thanks, {name}, for %s!")
+    eq(shared.message, "Shared thanks!")
+    h = active(shared, rogue)
+    h:add(1, 3600); h:change(); h:advance(1); eq(h.sent[1].text, "Shared thanks!")
+    h:cmd("messagescope character"); h:cmd("message You have my gratitude, {name}.")
+    h = active(shared, mage)
+    h:add(1, 3600); h:change(); h:advance(1)
+    eq(h.sent[1].text, "My arcane thanks, BuffFriend, for Blessing of Might!")
+    h:cmd("messagescope global"); h:advance(61); h:add(2, 3600); h:change(); h:advance(1)
+    eq(h.sent[2].text, "Shared thanks!"); eq(mage.message, "My arcane thanks, {name}, for %s!")
+    h:cmd("messagescope character")
+    h = active(shared, rogue)
+    h:add(1, 3600); h:change(); h:advance(1)
+    eq(h.sent[1].text, "You have my gratitude, BuffFriend.")
+end)
+
+test("message edits and random replies affect only the selected scope", function()
+    local shared = {message = "Shared thanks!"}
+    local character = {useCharacterMessage = true, message = "Character thanks!"}
+    local h = active(shared, character)
+    h:cmd("message random"); eq(character.message, nil); eq(shared.message, "Shared thanks!")
+    h:add(1, 3600); h:change(); h:advance(1); assert(h.sent[1].text ~= "Shared thanks!")
+    h:cmd("message Character restored."); h:cmd("messagescope global")
+    h:cmd("message Shared revised."); eq(shared.message, "Shared revised.")
+    eq(character.message, "Character restored.")
+    h:cmd("message random"); eq(shared.message, nil); eq(character.message, "Character restored.")
+end)
+
+test("changing scope cancels pending replies and preview uses the selected message", function()
+    local shared = {message = "Shared thanks!"}
+    local character = {message = "My thanks, {name}!"}
+    local h = active(shared, character)
+    h:add(1, 3600); h:change(); h:cmd("messagescope character"); h:advance(1)
+    eq(#h.sent, 0)
+    h:cmd("preview"); eq(#h.sent, 0)
+    assert(h.output[#h.output]:find("My thanks, BuffFriend!", 1, true))
+    h:add(2, 3600); h:change(); h:advance(1)
+    eq(h.sent[1].text, "My thanks, BuffFriend!")
+end)
+
+test("invalid character settings are normalized and custom message validation is unchanged", function()
+    local shared = {message = "Shared thanks!"}
+    local h = active(shared, "bad")
+    eq(h.env.ForeverThanksCharDB.useCharacterMessage, false)
+    h = active(shared, {useCharacterMessage = true, message = 42})
+    eq(h.env.ForeverThanksCharDB.message, nil)
+    h:cmd("message A valid character reply.")
+    for _, invalid in ipairs({string.rep("x", 201), "bad|reply", "bad\nreply"}) do
+        h:cmd("message " .. invalid)
+        eq(h.env.ForeverThanksCharDB.message, "A valid character reply.")
+    end
+    eq(shared.message, "Shared thanks!")
 end)
 test("new installations default to a five-second reply delay", function()
     local h = harness({__defaultDelay = true}); eq(h.env.ForeverThanksDB.delay, 5)
