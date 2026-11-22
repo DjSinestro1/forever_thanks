@@ -1,3 +1,38 @@
+# 0.1.0.20
+
+- Stops automatically sending custom text emotes, which could cause the game's "Interface action failed because of an AddOn" error.
+- After the reply delay, custom emotes now show a small prompt with the caster's name and your expanded message. Click Prepare emote, then press Enter in the normal chat box to send. Skip dismisses a reply.
+- Keeps whispers and built-in Thank/random emotes automatic. Clear the custom emote text to use automatic built-in emotes.
+- Preserves existing shared and character-specific messages. The settings window now explains the manual step for custom text.
+- Does not open chat without a click or overwrite an active chat message. Pending prompts expire after 60 seconds, coalesce buffs from one caster, and are cleared when disabled, zoning, or changing relevant settings.
+- Limits pending custom emotes to five. Diagnostics distinguish prepared drafts from actual chat requests.
+- Also includes the updates since 0.1.0.16: cooldowns from 10 to 3600 seconds, shared or character-specific custom emote text, two reply-mode buttons, and fixes for closely spaced buffs from different players being dropped.
+
+# 0.1.0.19
+
+- Simplifies the GUI to two reply modes: Whisper and Emote.
+- Renames the text field to Custom emote when Emote is selected, using the same text box as Custom whisper.
+- Uses saved custom emote text when provided. Saving a blank field restores the built-in Thank or random animated emotes.
+- Preserves whisper and emote text separately in shared and per-character settings. Each reply uses only the selected mode.
+- Migrates the previous Custom /em mode to Emote without deleting saved text.
+
+# 0.1.0.18
+
+- Adds a selectable Custom /em text mode alongside Whisper and built-in Emote modes.
+- Supports `{name}` for the buff caster and `%s` for the buff name. Text can be entered with or without an `/em` prefix.
+- Stores custom emote text separately from whispers, with shared or per-character text settings.
+- Custom text emotes do not play an animation. The GUI warns that the client may block automatic custom /em messages; no client restrictions are bypassed.
+- Fixes the anti-spam interval dropping the second player's thank-you when buffs arrive close together, such as priest Fortitude followed by Blessing of Wisdom. Replies now queue with three-second spacing and a bounded expiry.
+- Applies the stand-still check only to random animated emotes, not default THANK or custom text.
+- Adds the last reply decision to `/ft status` and more useful debug reasons for waiting, cooldowns, and rejected requests.
+
+# 0.1.0.17
+
+- Allows per-caster cooldowns from 10 to 3600 seconds in both the GUI and slash command. The previous 30-second minimum rejected a value of 10.
+- Keeps the default cooldown at 60 seconds.
+- Shows the allowed range beside the GUI field.
+- Preserves valid shorter cooldowns across reloads and logouts.
+
 # 0.1.0.16
 
 - Adds an optional character-specific custom whisper for roleplay alts and other characters needing different messages.

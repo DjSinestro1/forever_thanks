@@ -1,6 +1,6 @@
 # forever_thanks
 
-Friendly automatic thank-you whispers and targeted `/thank`-style emotes for
+Friendly automatic thank-you whispers and targeted built-in emotes, plus custom emote drafts for
 **World of Warcraft: Forever 1.60.1**, by Sinestro.
 
 ## Features
@@ -10,9 +10,11 @@ Friendly automatic thank-you whispers and targeted `/thank`-style emotes for
 - Supports custom whispers with `{name}` for the buff caster's character name and `%s` for the buff name.
 - Can save a different custom whisper for each character, or use one shared message. Existing shared messages remain the default.
 - Sends a private whisper by default, or a targeted emote without requiring the buff caster to be selected.
+- In **Emote** mode, leave the field blank for automatic Thank or random animated emotes. With custom text saved, a prompt offers **Prepare emote** after a buff: click it, then press Enter to send. Custom text uses `{name}` and `%s` and does not animate your character.
 - Waits five seconds after detecting a qualifying buff before replying.
 - Supports fixed `THANK` emotes or random positive emotes such as Salute, Bow, Wave, Cheer, and Applaud.
-- Emotes wait for you to stop moving or falling before choosing a reply, for up to 10 extra seconds after the configured delay. Whispers are not delayed by movement.
+- Random animated emotes wait for you to stop moving or falling, for up to 10 extra seconds after the configured delay. Default THANK, custom text, and whispers do not use this movement wait.
+- Replies to different players are spaced three seconds apart rather than dropping the second reply. Waiting replies expire if they become too old.
 - Can suppress whispers when the buff came from a party or raid member while still allowing emotes.
 - Includes an ignored-buff list using spell names or spell IDs, useful for buffs such as Campfire.
 - Ignores self-buffs, NPC buffs, permanent or unknown-duration effects, short effects such as Renew, and existing buffs restored during login, reloads, portals, or zone/instance transfers.
@@ -38,15 +40,32 @@ You can also click the blue Thank You heart button on the minimap's outer edge (
 
 Uncheck **Show minimap button** to hide the button. This choice is saved across reloads and logouts. You can always reopen settings with `/ft gui` and show it again.
 
-### Shared or character-specific whispers
+### Shared or character-specific reply text
 
-Leave **Use a character-specific custom whisper** unchecked to use the shared message. Existing custom whispers keep working this way by default.
+Leave **Use character-specific reply text** unchecked to use shared text. Existing custom whispers keep working this way by default.
 
-To give an alt its own roleplay message, check that option in `/ft gui`, type the character's message, and click **Save message**. That character remembers both the message and the checked option across logouts. Other characters keep their own choice.
+To give an alt its own roleplay message, check that option in `/ft gui`, type the character's message, and click **Save message**. That character remembers both the text and the checked option across logouts. Other characters keep their own choice. Whisper and custom-emote text are saved separately within each scope.
 
-Switching the checkbox displays the saved message for that scope without deleting either message. A new character-specific slot starts blank. Saving a blank message uses the rotating replies for the selected scope, rather than the other scope's custom message. **Reset defaults** also clears only the selected scope's message.
+Switching the checkbox displays the saved text for that scope without deleting the other scope's text. A new character-specific slot starts blank. Saving a blank whisper uses rotating replies; saving a blank custom emote uses built-in Thank or random animations. **Reset defaults** clears only the selected scope's reply text.
 
-Only the custom whisper and its scope choice are character-specific. Modes, cooldowns, reply delays, and the other settings remain shared.
+Only the custom reply text and its scope choice are character-specific. Modes, cooldowns, reply delays, and the other settings remain shared.
+
+### Write a custom emote
+
+1. Open `/ft gui` and select **Emote**.
+2. In **Custom emote**, enter `{name}, thanks for the %s!` or your own wording.
+3. Click **Save message**.
+4. After someone gives you a qualifying buff, click **Prepare emote** on the prompt, then press **Enter** to send.
+
+`{name}` becomes the caster's name and `%s` becomes the buff's name. WoW supplies your character's name at the start, as it does for a manually typed `/em`. You may include a leading `/em` in the settings text if you prefer; it is removed before saving. The same text box edits custom whispers in Whisper mode, and each mode keeps its own text.
+
+With custom text saved, a small prompt appears after the configured reply delay, showing the caster and your message. Click **Prepare emote** to fill the normal chat box, then **press Enter to send**. Escape cancels the chat draft; **Skip** dismisses a pending prompt. Nothing is sent or focused automatically, and an already-open chat message is not overwritten. No whisper or built-in animation is sent as well.
+
+Custom emote prompts expire after 60 seconds and at most five are kept, with one per caster. Disabling the addon, zoning, or changing relevant settings clears pending prompts. The per-caster cooldown starts when you prepare a draft; diagnostics count it as prepared, not confirmed sent, because you may edit or cancel it in chat.
+
+**Why the extra step?** Forever restricts automatic custom text emotes. The addon no longer attempts that blocked send, even inside an instance. Your Enter key sends through the normal game chat instead. Whispers and built-in Thank/random emotes remain automatic when the client permits them.
+
+To return to automatic built-in emotes, clear the custom emote text and click **Save message**. The normal Thank emote is directed at the buff caster by name without targeting them or clicking Prepare. The random-animations checkbox chooses random built-in emotes instead. `/ft preview` shows a local sample without sending it.
 
 ## Commands
 
@@ -57,15 +76,17 @@ Only the custom whisper and its scope choice are character-specific. Modes, cool
 | `/ft status` | Show settings and session diagnostics |
 | `/ft on` / `/ft off` | Enable or disable automatic replies |
 | `/ft mode whisper` | Send a private whisper; default mode |
-| `/ft mode emote` | Send a targeted `THANK` emote |
+| `/ft mode emote` | Offer custom emote drafts, or automatically use Thank/random emotes if the text is blank |
 | `/ft delay 5` | Set the reply delay from 0 to 60 seconds |
-| `/ft cooldown 60` | Set the per-player cooldown from 30 to 3600 seconds |
+| `/ft cooldown 60` | Set the per-player cooldown from 10 to 3600 seconds; default 60 |
 | `/ft groups on` / `/ft groups off` | Allow or suppress all thanks while grouped |
 | `/ft groupwhisper on` / `/ft groupwhisper off` | Allow or suppress whispers to party/raid buff casters |
 | `/ft emotes thank` / `/ft emotes random` | Choose fixed THANK or random positive emotes |
 | `/ft messagescope global` / `/ft messagescope character` | Choose the shared or character-specific custom whisper |
 | `/ft message Thank you {name} for the %s!` | Set a custom whisper; `{name}` becomes the caster's name and `%s` becomes the buff name |
 | `/ft message random` | Use the 28 rotating messages in the selected scope |
+| `/ft emotetext <text>` | Save custom `/em` text in the selected scope |
+| `/ft emotetext default` | Clear custom emote text and restore built-in Thank/random emotes |
 | `/ft ignore add <name or ID>` | Add a buff to the ignore list |
 | `/ft ignore remove <name or ID>` | Remove a buff from the ignore list |
 | `/ft ignore list` | Show ignored buffs |
@@ -77,13 +98,15 @@ Only the custom whisper and its scope choice are character-specific. Modes, cool
 
 For example, `Thank you {name} for the %s!` becomes `Thank you Steamboots for the Blessing of Might!`. This works in the custom-whisper field in `/ft gui` as well as with the message command. Use `/ft preview` to check it locally with example names.
 
-The message command, preview, and Save message button all use the currently selected message scope.
+The message commands and preview use the selected scope. The Save message button edits custom emote text in Emote mode, and custom whisper text in Whisper mode. The earlier `/ft mode custom` command remains an alias for Emote for compatibility, not a separate mode.
 
 ## Important behavior
 
 The addon intentionally ignores buffs that were already present during login, reload, zoning, or instance transfers so it does not thank everyone nearby for old buffs. New qualifying buffs must be detected while the client is ready. Combat does not automatically cancel a reply, but client restrictions, range limits, or unreadable aura data can still prevent it. Blocked actions are not repeatedly retried.
 
-Emotes are selected only after the player is confirmed stationary and not falling. While moving, the addon waits up to 10 additional seconds after the normal reply delay, then discards the reply instead of sending a stale thank-you. If movement information is unavailable or hidden, it uses the same bounded wait. This does not guarantee that the client will play an animation or deliver the emote.
+Random animated emotes are selected only after the player is confirmed stationary and not falling. While moving, the addon waits up to 10 additional seconds after the normal reply delay, then discards the reply instead of sending a stale thank-you. If movement information is unavailable or hidden, it uses the same bounded wait. Default THANK does not require readable movement information. This does not guarantee that the client will play an animation or deliver an emote.
+
+When two players buff you close together, their replies queue with three-second anti-spam spacing. Waiting is bounded to avoid sending stale replies. The per-caster cooldown is shared across reply modes: switching from Whisper to Emote does not thank the same player again immediately. `/ft status` shows the last reply decision to help identify cooldown, movement, or client-blocking problems.
 
 Whispers use the caster's realm-qualified name. Emotes use the caster's plain character name and do not read or change your selected target.
 

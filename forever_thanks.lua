@@ -1,7 +1,8 @@
 local addonName = ...
-local VERSION = "0.1.0.16"
+local VERSION = "0.1.0.20"
 local LOAD_SETTLE_SECONDS, AURA_QUIET_SECONDS, MAX_APPLICATION_AGE = 5, 1, 5
 local DEFAULT_DELAY = 5
+local MIN_COOLDOWN, MAX_COOLDOWN = 10, 3600
 local MIN_BUFF_DURATION = 300
 local MOVEMENT_WAIT_SECONDS = 10
 local POSITIVE_EMOTES = {"SALUTE", "BOW", "WAVE", "CHEER", "APPLAUD"}
@@ -38,14 +39,21 @@ local messages = {
 local frame = CreateFrame("Frame")
 local db, charDB, seen, ready = nil, nil, {}, false
 local pending, lastSent = {}, {}
+local emoteDrafts, emotePrompt, prepared = {}, nil, 0
 local generation, lastMessage, lastAttempt = 0, nil, -math.huge
 local lastEmote
 local sent, failures, restricted = 0, 0, 0
 local inWorld, settling, worldGeneration, lastAuraUpdate = false, true, 0, 0
 local minimapButton
+local lastDecision = "No reply considered yet"
 
 local function Say(text)
     print("|cff66ddffforever_thanks:|r " .. text)
+end
+
+local function NoteDecision(text)
+    if db and db.debug and text ~= lastDecision then Say(text) end
+    lastDecision = text
 end
 
 local function Readable(value)
@@ -63,6 +71,8 @@ end
 local function CancelPending()
     generation = generation + 1
     pending = {}
+    emoteDrafts = {}
+    if emotePrompt then emotePrompt:Hide() end
 end
 
 local function Trim(value)
@@ -130,11 +140,42 @@ local function SetMessageScope(character)
     CancelPending()
 end
 
+local function ExpandText(text, spell, casterName)
+    text = text:gsub("{name}", function() return casterName end)
+    return (text:gsub("%%s", function() return spell end))
+end
+
+local function NormalizeEmoteText(text)
+    if type(text) ~= "string" then return nil, false end
+    text = Trim(text)
+    if text == "" or text:lower() == "default" then return nil, true end
+    if text:sub(1, 1) == "/" then
+        local command, body = text:match("^/(%a+)%s+(.+)$")
+        command = command and command:lower()
+        if command ~= "em" and command ~= "emote" and command ~= "e" and command ~= "me" then return nil, false end
+        text = Trim(body)
+    end
+    if text == "" or #text > 200 or text:find("[%c|]") then return nil, false end
+    return text, true
+end
+
+local function SaveEmoteText(text)
+    local value, valid = NormalizeEmoteText(text)
+    if not valid then
+        Say("Enter custom emote text up to 200 bytes, with no controls or |. Do not enter other slash commands.")
+        return false
+    end
+    MessageSettings().emoteText = value
+    CancelPending()
+    Say(value and "Custom emote saved. Buffs show a Prepare emote button; click it, then press Enter to send."
+        or "Custom emote cleared; built-in Thank or random emotes enabled.")
+    return true
+end
+
 local function Message(spell, casterName)
     local custom = MessageSettings().message
     if custom then
-        local text = custom:gsub("{name}", function() return casterName end)
-        return (text:gsub("%%s", function() return spell end))
+        return ExpandText(custom, spell, casterName)
     end
     local index = math.random(#messages - (lastMessage and 1 or 0))
     if lastMessage and index >= lastMessage then index = index + 1 end
@@ -153,18 +194,121 @@ local function ChooseEmote()
 end
 
 local function StandingStill()
-    if type(GetUnitSpeed) ~= "function" then return false end
+    if type(GetUnitSpeed) ~= "function" then return false, "movement API unavailable" end
     local ok, speed = pcall(GetUnitSpeed, "player")
-    if not ok or not Readable(speed) or type(speed) ~= "number" or speed ~= 0 then return false end
+    if not ok or not Readable(speed) or type(speed) ~= "number" then return false, "movement information unreadable" end
+    if speed ~= 0 then return false, "player moving" end
     if type(IsFalling) == "function" then
         local got, falling = pcall(IsFalling, "player")
-        if not got or not Readable(falling) or falling then return false end
+        if not got or not Readable(falling) then return false, "falling information unreadable" end
+        if falling then return false, "player falling" end
     end
     return true
 end
 
+local function ValidEmoteDraft(entry)
+    return inWorld and ready and not settling and not ShouldSkip(entry.guid)
+        and db.channel == "EMOTE" and MessageSettings().emoteText == entry.template
+        and not IsIgnoredBuff(entry.spellId, entry.spell) and GetTime() < entry.expires
+end
+
+local RefreshEmotePrompt
+local function RemoveEmoteDraft()
+    local entry = table.remove(emoteDrafts, 1)
+    if entry then pending[entry.guid] = nil end
+    RefreshEmotePrompt()
+end
+
+local function PrepareEmoteDraft()
+    -- Only called by the visible button. Enter in Blizzard's chat box sends it.
+    local entry = emoteDrafts[1]
+    if not entry or not ValidEmoteDraft(entry) then RefreshEmotePrompt(); return end
+    local chat = ChatFrameUtil
+    if not chat or type(chat.OpenChat) ~= "function" then
+        Say("Chat is unavailable; the custom emote has not been sent.")
+        return
+    end
+    if chat.GetActiveWindow and chat.GetActiveWindow() then
+        Say("Finish or close your current chat message, then click Prepare emote.")
+        return
+    end
+    local ok = pcall(chat.OpenChat, "/em " .. entry.text)
+    if not ok then Say("Could not prepare the emote; nothing was sent."); return end
+    lastSent[entry.guid] = GetTime()
+    prepared = prepared + 1
+    NoteDecision("Custom emote prepared for " .. entry.name .. "; press Enter to send")
+    RemoveEmoteDraft()
+end
+
+RefreshEmotePrompt = function()
+    for i = #emoteDrafts, 1, -1 do
+        if not ValidEmoteDraft(emoteDrafts[i]) then
+            pending[emoteDrafts[i].guid] = nil
+            table.remove(emoteDrafts, i)
+        end
+    end
+    if #emoteDrafts == 0 then
+        if emotePrompt then emotePrompt:Hide() end
+        return
+    end
+    if not emotePrompt then
+        local f = CreateFrame("Frame", "ForeverThanksEmotePrompt", UIParent)
+        emotePrompt = f
+        f:SetWidth(420); f:SetHeight(176)
+        f:SetPoint("CENTER", UIParent, "CENTER", 0, -150)
+        f:SetFrameStrata("DIALOG")
+        local background = f:CreateTexture(nil, "BACKGROUND")
+        background:SetAllPoints(f)
+        background:SetColorTexture(0, 0, 0, 0.9)
+        local function Label(font, y, height)
+            local label = f:CreateFontString(nil, "OVERLAY", font)
+            label:SetPoint("TOPLEFT", f, "TOPLEFT", 12, y)
+            label:SetWidth(396); label:SetHeight(height)
+            label:SetJustifyH("LEFT")
+            label:SetJustifyV("TOP")
+            return label
+        end
+        f.title = Label("GameFontNormalLarge", -12, 20)
+        f.preview = Label("GameFontHighlightSmall", -38, 68)
+        Label("GameFontNormalSmall", -112, 16):SetText("Prepare fills chat. Press Enter to send, or Escape to cancel.")
+        local function Button(text, x, width, action)
+            local button = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+            button:SetPoint("TOPLEFT", f, "TOPLEFT", x, -138)
+            button:SetWidth(width); button:SetHeight(26)
+            button:SetText(text)
+            button:SetScript("OnClick", action)
+            return button
+        end
+        f.prepare = Button("Prepare emote", 12, 150, PrepareEmoteDraft)
+        f.skip = Button("Skip", 324, 84, RemoveEmoteDraft)
+    end
+    local entry = emoteDrafts[1]
+    emotePrompt.title:SetText("Custom emote ready (" .. #emoteDrafts .. ")")
+    emotePrompt.preview:SetText(entry.name .. " - " .. entry.spell .. "\n\n" .. entry.text)
+    emotePrompt:Show()
+end
+
+local function QueueEmoteDraft(guid, spell, spellId, name)
+    local template = MessageSettings().emoteText
+    local text = ExpandText(template, spell, name)
+    -- Leave space for /em in the normal chat edit box's 255-byte limit.
+    if #text > 251 then
+        pending[guid] = nil
+        Say("Custom emote too long after inserting names; shorten your text.")
+        return
+    end
+    if #emoteDrafts >= 5 then pending[guid] = nil; NoteDecision("Custom emote queue full"); return end
+    emoteDrafts[#emoteDrafts + 1] = {guid = guid, name = name, spell = spell, spellId = spellId,
+        template = template, text = text, expires = GetTime() + 60}
+    NoteDecision("Custom emote ready for " .. name .. "; waiting for Prepare emote and Enter")
+    RefreshEmotePrompt()
+    C_Timer.After(60, RefreshEmotePrompt)
+end
+
 local function SendThanks(name, spell, emoteName)
     if db.channel == "EMOTE" then
+        -- Never send custom text from a timer, even inside an instance.
+        if MessageSettings().emoteText then return false end
         local emote = C_ChatInfo and C_ChatInfo.PerformEmote
         if type(emote) == "function" then
             -- Like Blizzard's chat UI, interpret the return as "restricted".
@@ -176,14 +320,18 @@ local function SendThanks(name, spell, emoteName)
         return false
     end
     local text = Message(spell, emoteName)
-    if #text > 255 then Say("Message too long; shorten /ft message."); return false end
+    if #text > 255 then Say("Reply too long after inserting names; shorten your custom text."); return false end
     local send = C_ChatInfo and C_ChatInfo.SendChatMessage or SendChatMessage
     if type(send) ~= "function" then return false end
     return pcall(send, text, "WHISPER", nil, name)
 end
 local function Queue(guid, spell, spellId)
     local now = GetTime()
-    if pending[guid] or (lastSent[guid] and now - lastSent[guid] < db.cooldown) then return end
+    if pending[guid] then return end
+    if lastSent[guid] and now - lastSent[guid] < db.cooldown then
+        NoteDecision("Skipped " .. spell .. ": per-caster cooldown (" .. math.ceil(db.cooldown - (now - lastSent[guid])) .. "s left)")
+        return
+    end
     if IsIgnoredBuff(spellId, spell) then return end
     local ok, name, realm = pcall(UnitNameFromGUID, guid)
     if not ok or not Readable(name) or not Readable(realm)
@@ -195,37 +343,65 @@ local function Queue(guid, spell, spellId)
     local ticket = generation
     local deadline = now + db.delay + MOVEMENT_WAIT_SECONDS
     pending[guid] = true
+    NoteDecision("Queued " .. db.channel:lower() .. " for " .. spell .. " after the reply delay")
     local function Attempt()
         if ticket ~= generation then return end
         if not inWorld or settling or not ready or ShouldSkip(guid) then
             pending[guid] = nil
+            NoteDecision("Canceled reply: disabled, group filter, loading, or unreadable buff data")
             return
         end
         local time = GetTime()
-        if db.channel == "EMOTE" and time > deadline then
+        local animated = db.channel == "EMOTE" and db.emoteStyle == "RANDOM" and not MessageSettings().emoteText
+        if time > deadline then
             pending[guid] = nil
+            NoteDecision("Reply expired while waiting for movement or anti-spam spacing")
             return
         end
-        if db.channel == "EMOTE" and not StandingStill() then
-            if time < deadline then
-                C_Timer.After(math.min(0.5, deadline - time), Attempt)
+        if animated then
+            local still, reason = StandingStill()
+            if not still then
+                if time < deadline then
+                    NoteDecision("Waiting for random emote: " .. reason)
+                    C_Timer.After(math.min(0.5, deadline - time), Attempt)
+                else
+                    pending[guid] = nil
+                    NoteDecision("Random emote expired: " .. reason)
+                end
+                return
+            end
+        end
+        -- Cap bursts from multiple players as well as repeated buffs from one player.
+        if lastSent[guid] and time - lastSent[guid] < db.cooldown then
+            pending[guid] = nil
+            NoteDecision("Skipped reply: per-caster cooldown")
+            return
+        end
+        if db.channel == "EMOTE" and MessageSettings().emoteText then
+            QueueEmoteDraft(guid, spell, spellId, emoteName)
+            return
+        end
+        local spacingWait = 3 - (time - lastAttempt)
+        if spacingWait > 0 then
+            if time + spacingWait <= deadline then
+                NoteDecision("Waiting for anti-spam spacing: " .. spell)
+                C_Timer.After(spacingWait, Attempt)
             else
                 pending[guid] = nil
-                if db.debug then Say("Emote expired while moving or movement was unreadable.") end
+                NoteDecision("Reply expired while waiting for anti-spam spacing")
             end
             return
         end
         pending[guid] = nil
-        -- Cap bursts from multiple players as well as repeated buffs from one player.
-        if time - lastAttempt < 3 then return end
-        if lastSent[guid] and time - lastSent[guid] < db.cooldown then return end
         lastAttempt, lastSent[guid] = time, time
         local success = SendThanks(name, spell, emoteName)
         if success then
             sent = sent + 1
+            NoteDecision(db.channel:lower() .. " request sent for " .. spell)
             if db.debug then Say(db.channel .. " requested for " .. name .. " (" .. spell .. ").") end
         else
             failures = failures + 1
+            NoteDecision(db.channel:lower() .. " request blocked, unavailable, or rejected by the client")
             Say(db.channel .. " unavailable or blocked by the client. /ft status shows diagnostics.")
         end
     end
@@ -381,9 +557,12 @@ frame:SetScript("OnEvent", function(_, event, arg)
         charDB = ForeverThanksCharDB
         if type(charDB.useCharacterMessage) ~= "boolean" then charDB.useCharacterMessage = false end
         if type(charDB.message) ~= "string" or charDB.message == "" or #charDB.message > 200 then charDB.message = nil end
+        charDB.emoteText = NormalizeEmoteText(charDB.emoteText)
         if type(db.enabled) ~= "boolean" then db.enabled = true end
         -- Whisper is the default; preserve only an explicitly selected emote mode.
+        if db.channel == "CUSTOM_EMOTE" then db.channel = "EMOTE" end
         if db.channel ~= "EMOTE" then db.channel = "WHISPER" end
+        db.emoteText = NormalizeEmoteText(db.emoteText)
         if type(db.groups) ~= "boolean" then db.groups = true end
         if type(db.skipGroupWhispers) ~= "boolean" then db.skipGroupWhispers = false end
         if db.emoteStyle ~= "RANDOM" and db.emoteStyle ~= "THANK" then db.emoteStyle = "THANK" end
@@ -393,7 +572,7 @@ frame:SetScript("OnEvent", function(_, event, arg)
         if type(db.showMinimap) ~= "boolean" then db.showMinimap = true end
         UpdateMinimapVisibility()
         if type(db.cooldown) ~= "number" or db.cooldown ~= db.cooldown then db.cooldown = 60 end
-        db.cooldown = math.max(30, math.min(3600, db.cooldown))
+        db.cooldown = math.max(MIN_COOLDOWN, math.min(MAX_COOLDOWN, db.cooldown))
         if type(db.message) ~= "string" or db.message == "" or #db.message > 200 then db.message = nil end
         if not Available() then Say("Required Forever APIs are missing; automatic thanks is inactive.") end
         Say(VERSION .. " loaded. /ft status or /ft help.")
@@ -429,6 +608,8 @@ SlashCmdList.FOREVERTHANKS = function(input)
         Say(db.enabled and "Enabled." or "Disabled.")
     elseif cmd == "channel" or cmd == "mode" then
         local channel = rest:upper()
+        -- Keep the previous command aliases working without a third reply mode.
+        if channel == "CUSTOM" or channel == "CUSTOM_EMOTE" then channel = "EMOTE" end
         if channel == "WHISPER" or channel == "EMOTE" then
             if db.channel ~= channel then CancelPending() end
             db.channel = channel
@@ -457,14 +638,14 @@ SlashCmdList.FOREVERTHANKS = function(input)
         action = string.lower(action or "")
         if action == "add" then
             local key, label = NormalizeIgnoredBuff(value)
-            if key then db.ignoredBuffs[key] = label; Say("Ignoring buff: " .. label .. ".")
+            if key then db.ignoredBuffs[key] = label; CancelPending(); Say("Ignoring buff: " .. label .. ".")
             else Say("Use /ft ignore add <spell name or spell ID>.") end
         elseif action == "remove" then
             local key, label = NormalizeIgnoredBuff(value)
-            if key and db.ignoredBuffs[key] then db.ignoredBuffs[key] = nil; Say("No longer ignoring: " .. label .. ".")
+            if key and db.ignoredBuffs[key] then db.ignoredBuffs[key] = nil; CancelPending(); Say("No longer ignoring: " .. label .. ".")
             else Say("That buff is not in the ignore list.") end
         elseif action == "clear" then
-            db.ignoredBuffs = {}; Say("Buff ignore list cleared.")
+            db.ignoredBuffs = {}; CancelPending(); Say("Buff ignore list cleared.")
         elseif action == "list" then
             local count = 0
             for _, label in pairs(db.ignoredBuffs) do count = count + 1; Say("Ignored: " .. label) end
@@ -478,12 +659,14 @@ SlashCmdList.FOREVERTHANKS = function(input)
         Say("Minimap button: " .. rest .. ". Settings remain available with /ft gui.")
     elseif cmd == "cooldown" then
         local seconds = tonumber(rest)
-        if seconds and seconds >= 30 and seconds <= 3600 then
+        if seconds and seconds >= MIN_COOLDOWN and seconds <= MAX_COOLDOWN then
             db.cooldown = math.floor(seconds); Say("Per-player cooldown: " .. db.cooldown .. "s.")
-        else Say("Use /ft cooldown 30-3600 (default 60 seconds).") end
+        else Say("Use /ft cooldown " .. MIN_COOLDOWN .. "-" .. MAX_COOLDOWN .. " (default 60 seconds).") end
     elseif cmd == "messagescope" and (rest == "global" or rest == "character") then
         SetMessageScope(rest == "character")
         Say("Custom whisper scope: " .. rest .. ". Existing messages in the other scope are preserved.")
+    elseif cmd == "emotetext" then
+        SaveEmoteText(rest)
     elseif cmd == "message" then
         local settings = MessageSettings()
         if rest == "random" or rest == "default" then settings.message = nil; Say("28 rotating messages enabled for the selected scope.")
@@ -491,7 +674,15 @@ SlashCmdList.FOREVERTHANKS = function(input)
             settings.message = rest; Say("Custom message saved for " .. (charDB.useCharacterMessage and "this character" or "all shared-message characters") .. ". {name} inserts the caster name; %s inserts the buff name.")
         else Say("Use /ft message <text, up to 200 bytes> or /ft message random.") end
     elseif cmd == "preview" then
-        Say("Preview only (not sent): " .. Message("Blessing of Might", "BuffFriend"))
+        local text
+        if db.channel == "EMOTE" then
+            local custom = MessageSettings().emoteText
+            text = custom and ExpandText(custom, "Blessing of Might", "BuffFriend")
+                or (db.emoteStyle == "RANDOM" and "Random animated emote" or "Thank emote")
+        else
+            text = Message("Blessing of Might", "BuffFriend")
+        end
+        Say("Preview only (not sent): " .. text)
     elseif cmd == "debug" then
         db.debug = not db.debug; Say("Debug: " .. (db.debug and "on" or "off"))
     elseif cmd == "status" or cmd == "" then
@@ -500,8 +691,9 @@ SlashCmdList.FOREVERTHANKS = function(input)
             .. "; " .. (settling and "settling after loading" or (ready and "watching" or "waiting for safe baseline")) .. ".")
         Say("Buff duration >" .. MIN_BUFF_DURATION .. "s; cooldown " .. db.cooldown .. "s; groups " .. (db.groups and "on" or "off") .. ".")
         Say("Channel: " .. db.channel:lower() .. ", delay " .. db.delay .. "s; message scope: " .. (charDB.useCharacterMessage and "character" or "global") .. ". This login: chat requests=" .. sent .. ", send errors=" .. failures .. ", restricted scans=" .. restricted .. ".")
-        Say("Combat replies allowed when client data is readable; emotes wait up to 10s for movement to stop. Minimap: " .. (db.showMinimap and "on" or "off") .. ".")
-        Say("After loading: 5s minimum, then 1s without aura updates. Applications older than 5s are skipped.")
+        Say("Combat replies allowed when client data is readable; random animations wait up to 10s for movement. Minimap: " .. (db.showMinimap and "on" or "off") .. ".")
+        Say("Custom emotes require Prepare emote, then Enter; pending=" .. #emoteDrafts .. ", prepared=" .. prepared .. " (not confirmed sent).")
+        Say("After loading: 5s minimum, then 1s quiet. Applications older than 5s skipped. Last decision: " .. lastDecision .. ".")
     else
         Say("/ft on | off | status | preview | debug | gui")
         Say("/ft mode whisper | emote (default: whisper)")
@@ -509,6 +701,7 @@ SlashCmdList.FOREVERTHANKS = function(input)
         Say("/ft emotes thank|random ; /ft ignore add|remove|list|clear <name or ID>")
         Say("/ft minimap on|off")
         Say("/ft messagescope global|character ; /ft message <text>|random")
+        Say("/ft emotetext <text>|default ; custom text needs Prepare emote, then Enter; blank emotes are automatic")
     end
 end
 
@@ -578,8 +771,11 @@ local function RefreshOptions()
     optionsFrame.delay:SetText(tostring(db.delay))
     optionsFrame.cooldown:SetText(tostring(db.cooldown))
     updatingOptions = false
-    optionsFrame.message:SetText(MessageSettings().message or "")
-    optionsFrame.messageLabel:SetText("Custom whisper (" .. (charDB.useCharacterMessage and "this character" or "shared") .. "): {name} = caster, %s = buff")
+    local emoteMode = db.channel == "EMOTE"
+    optionsFrame.message:SetText(emoteMode and (MessageSettings().emoteText or "") or (MessageSettings().message or ""))
+    optionsFrame.messageLabel:SetText((emoteMode and "Custom emote" or "Custom whisper") .. " (" .. (charDB.useCharacterMessage and "this character" or "shared") .. "): {name} = caster, %s = buff")
+    optionsFrame.messageHint:SetText(emoteMode and "Custom: click Prepare, then Enter. Blank: automatic emotes."
+        or "Blank = rotating replies. Click Save message.")
     optionsFrame.modeText:SetText("Mode: " .. db.channel:lower())
     UpdateOptionsStatus()
     local ignored = SortedIgnoredBuffs()
@@ -675,7 +871,7 @@ local function CreateOptions()
         CancelPending()
         RefreshOptions()
     end)
-    f.randomEmotes = OptionsCheck(f, "Use random positive emotes instead of THANK", 20, -188, function(button)
+    f.randomEmotes = OptionsCheck(f, "Use random animations when custom emote text is blank", 20, -188, function(button)
         db.emoteStyle = button:GetChecked() and "RANDOM" or "THANK"
         CancelPending()
         RefreshOptions()
@@ -696,11 +892,11 @@ local function CreateOptions()
     OptionsLabel(f, "Reply delay (seconds)", 20, -266, 170)
     f.delay = OptionsEdit(f, 190, -258, 70, 24)
     BindOptionsNumber(f.delay, 0, 60, "delay", "delay")
-    OptionsLabel(f, "Cooldown per caster (seconds)", 280, -266, 170)
+    OptionsLabel(f, "Cooldown per caster (10-3600s)", 280, -266, 170)
     f.cooldown = OptionsEdit(f, 450, -258, 35, 24)
-    BindOptionsNumber(f.cooldown, 30, 3600, "cooldown", "cooldown")
+    BindOptionsNumber(f.cooldown, MIN_COOLDOWN, MAX_COOLDOWN, "cooldown", "cooldown")
 
-    f.characterMessage = OptionsCheck(f, "Use a character-specific custom whisper", 20, -302, function(button)
+    f.characterMessage = OptionsCheck(f, "Use character-specific reply text", 20, -302, function(button)
         button = button or this
         SetMessageScope(button:GetChecked() and true or false)
         RefreshOptions()
@@ -708,6 +904,7 @@ local function CreateOptions()
     f.messageLabel = OptionsLabel(f, "", 20, -338, 450)
     f.message = OptionsEdit(f, 20, -362, 350, 24)
     OptionsButton(f, "Save message", 380, -362, 105, 24, function()
+        if db.channel == "EMOTE" then SaveEmoteText(f.message:GetText()); RefreshOptions(); return end
         local settings = MessageSettings()
         local text = Trim(f.message:GetText())
         if text == "" or text:lower() == "random" or text:lower() == "default" then
@@ -719,6 +916,7 @@ local function CreateOptions()
         end
         RefreshOptions()
     end)
+    f.messageHint = OptionsLabel(f, "", 20, -391, 450)
 
     OptionsLabel(f, "Ignored buffs (enter a spell name or spell ID)", 20, -406, 400)
     f.ignoreInput = OptionsEdit(f, 20, -430, 230, 24)
@@ -756,6 +954,7 @@ local function CreateOptions()
         db.delay = DEFAULT_DELAY
         db.cooldown = 60
         MessageSettings().message = nil
+        MessageSettings().emoteText = nil
         db.ignoredBuffs = {}
         db.showMinimap = true
         UpdateMinimapVisibility()
@@ -767,7 +966,7 @@ local function CreateOptions()
     f:SetScript("OnShow", RefreshOptions)
     f:SetScript("OnHide", function()
         CommitOptionsNumber(f.delay, 0, 60, "delay", "delay", true)
-        CommitOptionsNumber(f.cooldown, 30, 3600, "cooldown", "cooldown", true)
+        CommitOptionsNumber(f.cooldown, MIN_COOLDOWN, MAX_COOLDOWN, "cooldown", "cooldown", true)
     end)
     return f
 end

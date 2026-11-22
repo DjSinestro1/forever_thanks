@@ -7,12 +7,30 @@ local function harness(saved, character)
     local useDefaultDelay = saved.__defaultDelay
     saved.__defaultDelay = nil
     if not useDefaultDelay and saved.delay == nil then saved.delay = 1 end
-    local h = {auras = {}, now = 100, tasks = {}, sent = {}, emotes = {}, output = {}, combat = false, grouped = false}
+    local h = {auras = {}, now = 100, tasks = {}, sent = {}, chatRequests = {}, emotes = {}, output = {}, combat = false, grouped = false}
     local env = setmetatable({ForeverThanksDB = saved, ForeverThanksCharDB = character or {}, SlashCmdList = {}}, {__index = _G})
     env.print = function(text) h.output[#h.output + 1] = text end
     env.issecretvalue = function(v) return type(v) == "table" and v.secret == true end
-    env.CreateFrame = function()
-        return {RegisterEvent = function() end, SetScript = function(_, _, fn) h.handler = fn end}
+    env.CreateFrame = function(kind, name)
+        local function widget()
+            local f = {scripts = {}}
+            setmetatable(f, {__index = function(_, key)
+                if key:find("^Set") or key:find("^Register") then return function() end end
+            end})
+            function f:SetScript(event, fn) self.scripts[event] = fn end
+            function f:SetText(text) self.text = text end
+            function f:Show() self.shown = true end
+            function f:Hide() self.shown = false end
+            function f:CreateFontString() return widget() end
+            function f:CreateTexture() return widget() end
+            return f
+        end
+        local f = widget()
+        if name == "ForeverThanksEmotePrompt" then h.prompt = f end
+        if not kind or (kind == "Frame" and not name) then
+            function f:SetScript(event, fn) if event == "OnEvent" then h.handler = fn end end
+        end
+        return f
     end
     env.GetTime = function() return h.now end
     env.InCombatLockdown = function() return h.combat end
@@ -23,7 +41,14 @@ local function harness(saved, character)
     end
     env.IsFalling = function() return h.falling or false end
     env.IsInInstance = function() return not h.outdoors end
-    env.ChatFrameUtil = {OpenChat = function(text) h.draft = text end}
+    env.ChatFrameUtil = {
+        OpenChat = function(text)
+            assert(h.click, "Opening chat requires a deliberate prompt click")
+            if h.openError then error("chat unavailable") end
+            h.draft, h.chatActive = text, true
+        end,
+        GetActiveWindow = function() return h.chatActive end,
+    }
     env.IsInGroup = function() return h.grouped end
     env.GetNumPartyMembers = function() return h.party and 1 or 0 end
     env.GetNumRaidMembers = function() return h.raid and 1 or 0 end
@@ -42,6 +67,8 @@ local function harness(saved, character)
     end
     env.C_Timer = {After = function(delay, fn) h.tasks[#h.tasks + 1] = {h.now + delay, fn} end}
     env.C_ChatInfo = {SendChatMessage = function(text, channel, language, recipient)
+        h.chatRequests[#h.chatRequests + 1] = channel
+        assert(channel ~= "EMOTE", "Addon must never directly send custom emotes")
         if h.sendError then error("blocked") end
         h.sent[#h.sent + 1] = {text = text, channel = channel, recipient = recipient}
     end}
@@ -64,6 +91,18 @@ local function harness(saved, character)
     local chunk = assert(loadfile("forever_thanks.lua")); setfenv(chunk, env); chunk("forever_thanks")
     function h:event(event, arg) self.handler(nil, event, arg) end
     function h:cmd(command) env.SlashCmdList.FOREVERTHANKS(command) end
+    function h:prepare()
+        assert(self.prompt and self.prompt.shown, "No custom emote prompt")
+        self.click = true
+        self.prompt.prepare.scripts.OnClick()
+        self.click = false
+    end
+    function h:enter()
+        -- Simulate the user's native chat submission, not an addon API call.
+        assert(self.chatActive and self.draft)
+        self.sent[#self.sent + 1] = {text = self.draft:gsub("^/em ", ""), channel = "EMOTE", manual = true}
+        self.chatActive, self.draft = false, nil
+    end
     function h:advance(seconds)
         local finish = self.now + seconds
         while true do
@@ -137,6 +176,42 @@ test("per-caster cooldown then refresh allowed; random message changes", functio
 end)
 test("global burst guard across different casters", function()
     local h = active(); h:add(1, 3600, "Player-A"); h:add(2, 3600, "Player-B"); h:change(); h:advance(1); eq(#h.sent, 1)
+    h:advance(2.9); eq(#h.sent, 1)
+    h:advance(0.1); eq(#h.sent, 2)
+end)
+
+test("Fortitude followed by Wisdom queues both default THANK replies without a target", function()
+    local h = active({channel = "EMOTE", emoteStyle = "THANK"})
+    h:add(1, 3600, "Player-Priest", "Power Word: Fortitude")
+    h:change(); h:advance(0.5)
+    h:add(2, 3600, "Player-Paladin", "Blessing of Wisdom")
+    h:change(); h:advance(0.5)
+    eq(#h.emotes, 1); eq(h.emotes[1].target, "Priest"); eq(h.emotes[1].token, "THANK")
+    h:advance(0.5); eq(#h.emotes, 1)
+    h:cmd("status"); assert(h.output[#h.output]:find("anti-spam spacing: Blessing of Wisdom", 1, true))
+    h:advance(2.5)
+    eq(#h.emotes, 2); eq(h.emotes[2].target, "Paladin"); eq(h.emotes[2].token, "THANK")
+    eq(#h.sent, 0)
+end)
+
+test("anti-spam waiting coalesces caster buffs and is canceled by disable or zoning", function()
+    for _, cancel in ipairs({"off", "zone", "none"}) do
+        local h = active({channel = "EMOTE"})
+        h:add(1, 3600, "Player-Priest"); h:add(2, 3600, "Player-Paladin")
+        h:change(); h:advance(1); eq(#h.emotes, 1)
+        h:add(3, 3600, "Player-Paladin"); h:change()
+        if cancel == "off" then h:cmd("off")
+        elseif cancel == "zone" then h:event("PLAYER_LEAVING_WORLD") end
+        h:advance(10)
+        eq(#h.emotes, cancel == "none" and 2 or 1)
+    end
+end)
+
+test("large buff bursts stay spaced, expire old replies, and leave no retry timers", function()
+    local h = active({channel = "EMOTE"})
+    for i = 1, 8 do h:add(i, 3600, "Player-Caster" .. i) end
+    h:change(); h:advance(30)
+    eq(#h.emotes, 4); eq(#h.tasks, 0)
 end)
 test("both modes preserve queued replies on combat entry and thank new combat buffs", function()
     for _, mode in ipairs({"WHISPER", "EMOTE"}) do
@@ -223,6 +298,29 @@ test("saved settings honored and corrupt defaults normalized", function()
     h = active({cooldown = "bad", message = 7}); eq(h.env.ForeverThanksDB.cooldown, 60); eq(h.env.ForeverThanksDB.message, nil)
     h:cmd("cooldown 5"); eq(h.env.ForeverThanksDB.cooldown, 60)
     h:cmd("cooldown 90"); eq(h.env.ForeverThanksDB.cooldown, 90)
+end)
+
+test("ten-second cooldown is accepted by command, persists on reload, and keeps its bounds", function()
+    local h = active()
+    h:cmd("cooldown 10"); eq(h.env.ForeverThanksDB.cooldown, 10)
+    h = active(h.env.ForeverThanksDB); eq(h.env.ForeverThanksDB.cooldown, 10)
+    for _, invalid in ipairs({"0", "-1", "5", "9", "9.9", "3601", "bad"}) do
+        h:cmd("cooldown " .. invalid); eq(h.env.ForeverThanksDB.cooldown, 10)
+    end
+    h:cmd("cooldown 3600"); eq(h.env.ForeverThanksDB.cooldown, 3600)
+    h = active({cooldown = 5}); eq(h.env.ForeverThanksDB.cooldown, 10)
+end)
+
+test("ten-second cooldown prevents early repeats and permits both modes at the boundary", function()
+    for _, mode in ipairs({"WHISPER", "EMOTE"}) do
+        local h = active({cooldown = 10, delay = 0, channel = mode})
+        h:add(1, 3600); h:change(); h:advance(0)
+        eq(#h.sent + #h.emotes, 1)
+        h:advance(9); h:add(2, 3600); h:change(); h:advance(0)
+        eq(#h.sent + #h.emotes, 1)
+        h:advance(1); h:add(3, 3600); h:change(); h:advance(0)
+        eq(#h.sent + #h.emotes, 2)
+    end
 end)
 
 test("existing shared messages remain the default and character scope is opt-in", function()
@@ -420,28 +518,196 @@ test("nil emote restriction flag is not reported as blocked", function()
     eq(#h.emotes, 1); assert(table.concat(h.output):find("send errors=0", 1, true))
 end)
 
-test("moving emotes wait until stopped, retaining the caster and random style", function()
+test("default THANK for Wisdom does not depend on readable movement information", function()
+    for _, kind in ipairs({"moving", "missing", "secret", "error"}) do
+        local h = active({channel = "EMOTE", emoteStyle = "THANK"})
+        if kind == "moving" then h.speed = 7; h.falling = true
+        elseif kind == "missing" then h.env.GetUnitSpeed = nil
+        elseif kind == "secret" then h.speed = {secret = true}
+        else h.speedError = true end
+        h:add(1, 3600, "Player-Paladin", "Blessing of Wisdom"); h:change(); h:advance(1)
+        eq(#h.emotes, 1); eq(h.emotes[1].token, "THANK"); eq(h.emotes[1].target, "Paladin")
+    end
+end)
+
+test("custom text emotes expand names and buffs but require clicking Prepare and pressing Enter", function()
+    local h = active({message = "Whisper unchanged."})
+    h:cmd("mode custom")
+    h:cmd("emotetext /em thank you {name} for this amazing %s, 100% appreciated!")
+    h.speed = 7; h.falling = true; h.speedError = true
+    h:add(1, 3600, "Player-Paladin", "Blessing of Wisdom"); h:change(); h:advance(1)
+    eq(#h.sent, 0); eq(h.draft, nil); assert(h.prompt.shown)
+    h:prepare(); eq(#h.sent, 0); h:enter()
+    eq(#h.sent, 1); eq(h.sent[1].channel, "EMOTE"); eq(h.sent[1].recipient, nil)
+    eq(h.sent[1].text, "thank you Paladin for this amazing Blessing of Wisdom, 100% appreciated!")
+    eq(#h.emotes, 0); eq(h.env.ForeverThanksDB.message, "Whisper unchanged.")
+end)
+
+test("custom emote uses the Emote mode, built-in blank fallback, and separate character storage", function()
+    local shared = {emoteText = "shared thanks {name}!", message = "Shared whisper."}
+    local character = {useCharacterMessage = true, message = "My whisper."}
+    local h = active(shared, character); h:cmd("mode custom")
+    h:cmd("preview"); eq(#h.sent, 0); eq(#h.emotes, 0)
+    assert(h.output[#h.output]:find("Thank emote", 1, true))
+    h:cmd("emotetext /me salutes {name} for %s!")
+    eq(character.emoteText, "salutes {name} for %s!"); eq(shared.emoteText, "shared thanks {name}!")
+    h = active(shared, character)
+    eq(shared.channel, "EMOTE")
+    h:add(1, 3600); h:change(); h:advance(1)
+    h:prepare(); h:enter()
+    eq(h.sent[1].text, "salutes BuffFriend for Blessing of Might!")
+    h:cmd("emotetext default"); eq(character.emoteText, nil); eq(shared.emoteText, "shared thanks {name}!")
+    eq(character.message, "My whisper.")
+    h:advance(61); h:add(2, 3600); h:change(); h:advance(1)
+    eq(#h.sent, 1); eq(#h.emotes, 1); eq(h.emotes[1].token, "THANK")
+end)
+
+test("custom emote validation strips only emote prefixes and rejects commands and invalid text", function()
+    local h = active({channel = "CUSTOM_EMOTE"})
+    for _, prefix in ipairs({"/em ", "/emote ", "/e ", "/me "}) do
+        h:cmd("emotetext " .. prefix .. "thanks {name}!")
+        eq(h.env.ForeverThanksDB.emoteText, "thanks {name}!")
+    end
+    for _, text in ipairs({"/run evil()", "/dance", "bad|text", "bad\ntext", string.rep("x", 201)}) do
+        h:cmd("emotetext " .. text)
+        eq(h.env.ForeverThanksDB.emoteText, "thanks {name}!")
+    end
+    h:cmd("emotetext "); eq(h.env.ForeverThanksDB.emoteText, nil)
+end)
+
+test("custom emote length and unavailable chat fail without sending or falling back", function()
+    local h = active({channel = "CUSTOM_EMOTE", emoteText = string.rep("%s", 100)})
+    h:add(1, 3600); h:change(); h:advance(1); eq(#h.sent, 0); eq(#h.emotes, 0)
+    eq(h.prompt, nil)
+    h = active({channel = "EMOTE", emoteText = "thanks {name}!"}); h.openError = true
+    h:add(1, 3600); h:change(); h:advance(1); h:change(); h:advance(10)
+    h:prepare(); assert(h.prompt.shown); eq(h.draft, nil)
+    eq(#h.sent, 0); eq(#h.emotes, 0)
+    h:cmd("status"); assert(table.concat(h.output):find("prepared=0 (not confirmed sent)", 1, true))
+end)
+
+test("custom text mode respects disabling, scope changes, filters, and same-caster cooldown", function()
+    for _, cancel in ipairs({"off", "mode whisper", "messagescope character", "zone"}) do
+        local h = active({channel = "EMOTE", emoteText = "thanks {name}!"})
+        h:add(1, 3600); h:change()
+        if cancel == "zone" then h:event("PLAYER_LEAVING_WORLD") else h:cmd(cancel) end
+        h:advance(12); eq(#h.sent, 0); eq(#h.emotes, 0)
+    end
+    local h = active({channel = "EMOTE", emoteText = "thanks {name}!", skipGroupWhispers = true})
+    h.party = "Player-BuffFriend"
+    h:add(1, 300); h:add(2, 3600, "Player-Self"); h:change(); h:advance(1); eq(#h.sent, 0)
+    h:add(3, 3600); h:change(); h:advance(1); eq(#h.sent, 0); h:prepare(); h:enter()
+    eq(#h.sent, 1); eq(h.sent[1].channel, "EMOTE")
+    h:add(4, 3600); h:change(); h:advance(10); eq(#h.sent, 1)
+end)
+
+test("old custom mode migrates into Emote while keeping saved roleplay text", function()
+    local shared = {channel = "CUSTOM_EMOTE", emoteText = "My gratitude, {name}!", message = "Whisper stays."}
+    local h = active(shared)
+    eq(shared.channel, "EMOTE"); eq(shared.emoteText, "My gratitude, {name}!")
+    h:add(1, 3600); h:change(); h:advance(1)
+    h:prepare(); h:enter()
+    eq(h.sent[1].channel, "EMOTE"); eq(h.sent[1].text, "My gratitude, BuffFriend!")
+    eq(#h.emotes, 0)
+    h:cmd("mode whisper"); eq(shared.message, "Whisper stays.")
+    h:cmd("mode custom"); eq(shared.channel, "EMOTE")
+end)
+
+test("Emote with custom text only prepares text; blank restores automatic Thank or random", function()
     for _, style in ipairs({"THANK", "RANDOM"}) do
+        local h = active({channel = "EMOTE", emoteStyle = style})
+        h:cmd("emotetext thank you {name} for %s!")
+        h.speed = 7; h.speedError = true
+        h:add(1, 3600); h:change(); h:advance(1)
+        eq(#h.sent, 0); h:prepare(); h:enter()
+        eq(#h.sent, 1); eq(h.sent[1].channel, "EMOTE"); eq(#h.emotes, 0)
+        h:cmd("emotetext "); h.speedError = false; h.speed = 0
+        h:advance(61); h:add(2, 3600); h:change(); h:advance(1)
+        eq(#h.sent, 1); eq(#h.emotes, 1)
+        if style == "THANK" then eq(h.emotes[1].token, "THANK") end
+    end
+end)
+
+test("custom emotes never call protected sending APIs, indoors or outdoors, moving or in combat", function()
+    for _, outdoors in ipairs({false, true}) do
+        local h = active({channel = "EMOTE", emoteText = "{name}, thanks for %s!"})
+        h.outdoors, h.combat, h.speed, h.sendError = outdoors, true, 7, true
+        h:add(1, 3600, "Player-Paladin", "Blessing of Wisdom"); h:change(); h:advance(1)
+        eq(#h.sent, 0); eq(#h.emotes, 0); eq(h.draft, nil)
+        h:prepare()
+        eq(h.draft, "/em Paladin, thanks for Blessing of Wisdom!")
+        eq(#h.sent, 0); eq(#h.chatRequests, 0); eq(h.prompt.shown, false)
+        h:cmd("status"); assert(table.concat(h.output):find("prepared=1 (not confirmed sent)", 1, true))
+    end
+end)
+
+test("custom prompt never overwrites existing chat and missing chat API stays local", function()
+    local h = active({channel = "EMOTE", emoteText = "thanks {name}!"})
+    h:add(1, 3600); h:change(); h:advance(1)
+    h.chatActive, h.draft = true, "My unfinished message"
+    h:prepare(); eq(h.draft, "My unfinished message"); assert(h.prompt.shown)
+    h.chatActive = false; h.env.ChatFrameUtil.OpenChat = nil
+    h:prepare(); eq(h.draft, "My unfinished message"); eq(#h.sent, 0)
+end)
+
+test("visible custom prompt is canceled by disable, zoning, settings, filters, or restricted data", function()
+    for _, cancel in ipairs({"off", "zone", "mode whisper", "messagescope character", "emotetext new text", "ignore add Blessing of Might", "read", "groups off"}) do
+        local h = active({channel = "EMOTE", emoteText = "thanks {name}!"})
+        h:add(1, 3600); h:change(); h:advance(1); assert(h.prompt.shown)
+        local click = h.prompt.prepare.scripts.OnClick
+        if cancel == "zone" then h:event("PLAYER_LEAVING_WORLD")
+        elseif cancel == "read" then h.readError = true; h:change()
+        else h:cmd(cancel) end
+        eq(h.prompt.shown, false)
+        h.click = true; click(); h.click = false
+        eq(#h.sent, 0); eq(h.draft, nil)
+    end
+end)
+
+test("custom drafts coalesce casters, preserve their names, support Skip, and expire", function()
+    local h = active({channel = "EMOTE", emoteText = "thanks {name} for %s!"})
+    h:add(1, 3600, "Player-Priest", "Fortitude"); h:add(2, 3600, "Player-Paladin", "Wisdom")
+    h:change(); h:advance(1)
+    h:add(3, 3600, "Player-Priest"); h:change(); h:advance(2)
+    eq(h.prompt.title.text, "Custom emote ready (2)")
+    h.casterName = "Wrong Person"; h:prepare()
+    eq(h.draft, "/em thanks Priest for Fortitude!"); h:enter()
+    assert(h.prompt.preview.text:find("Paladin - Wisdom", 1, true))
+    h.prompt.skip.scripts.OnClick(); eq(h.prompt.shown, false)
+    h:advance(61); h:add(4, 3600, "Player-Paladin"); h:change(); h:advance(1)
+    assert(h.prompt.shown); h:advance(60); eq(h.prompt.shown, false)
+    eq(#h.sent, 1); eq(#h.tasks, 0)
+end)
+
+test("custom prompt queue is capped at five and expires without opening chat", function()
+    local h = active({channel = "EMOTE", emoteText = "thanks {name}!"})
+    for i = 1, 8 do h:add(i, 3600, "Player-Caster" .. i) end
+    h:change(); h:advance(1)
+    eq(h.prompt.title.text, "Custom emote ready (5)")
+    h:advance(60); eq(h.prompt.shown, false); eq(h.draft, nil); eq(#h.sent, 0); eq(#h.tasks, 0)
+end)
+
+test("random animated emotes wait until stopped, retaining the caster", function()
+    for _, style in ipairs({"RANDOM"}) do
         local h = active({channel = "EMOTE", emoteStyle = style})
         h:add(1, 3600); h:change(); h.speed = 7 -- Movement begins during the reply delay.
         h:advance(3); eq(#h.emotes, 0)
         h.casterName = "Somebody Else"; h.speed = 0; h:advance(0.5)
         eq(#h.emotes, 1); eq(h.emotes[1].target, "BuffFriend")
         eq(h.emotes[1].suppressMoveError, true)
-        if style == "THANK" then eq(h.emotes[1].token, "THANK") end
         h:change(); h:advance(20); eq(#h.emotes, 1)
     end
 end)
 
 test("movement wait expires without a late emote or consuming the caster cooldown", function()
-    local h = active({channel = "EMOTE"}); h.speed = 7
+    local h = active({channel = "EMOTE", emoteStyle = "RANDOM"}); h.speed = 7
     h:add(1, 3600); h:change(); h:advance(12); eq(#h.emotes, 0); eq(#h.tasks, 0)
     h.speed = 0; h:advance(1); eq(#h.emotes, 0)
     h:add(2, 3600); h:change(); h:advance(1); eq(#h.emotes, 1)
 end)
 
 test("a delayed timer cannot send a stale emote after the movement deadline", function()
-    local h = active({channel = "EMOTE"}); h.speed = 7
+    local h = active({channel = "EMOTE", emoteStyle = "RANDOM"}); h.speed = 7
     h:add(1, 3600); h:change(); h:advance(1)
     local task = table.remove(h.tasks, 1)
     h.now = h.now + 11; h.speed = 0; task[2]()
@@ -467,12 +733,12 @@ test("whispers ignore movement and send during combat", function()
 end)
 
 test("movement wait respects combat transitions, cancellation, and per-caster coalescing", function()
-    local h = active({channel = "EMOTE"}); h.speed = 7
+    local h = active({channel = "EMOTE", emoteStyle = "RANDOM"}); h.speed = 7
     h:add(1, 3600); h:change(); h:advance(1)
     h:add(2, 3600); h:change(); h.combat = true; h:event("PLAYER_REGEN_DISABLED")
     h.speed = 0; h:advance(0.5); eq(#h.emotes, 1)
     for _, cancel in ipairs({"off", "mode whisper", "zone"}) do
-        h = active({channel = "EMOTE"}); h.speed = 7
+        h = active({channel = "EMOTE", emoteStyle = "RANDOM"}); h.speed = 7
         h:add(1, 3600); h:change(); h:advance(2)
         if cancel == "zone" then h:event("PLAYER_LEAVING_WORLD") else h:cmd(cancel) end
         h.speed = 0; h:advance(12); eq(#h.emotes, 0); eq(#h.sent, 0)
@@ -517,7 +783,7 @@ for _, mode in ipairs({"EMOTE", "WHISPER"}) do
         local h = harness({channel = mode}); h:event("PLAYER_ENTERING_WORLD")
         h:advance(4.8); h:add(1, 3600); h:change(); h:advance(0.5)
         h:add(2, 3600); h:change(); h:advance(0.9); h:cmd("status")
-        assert(h.output[#h.output - 4]:find("settling", 1, true))
+        assert(table.concat(h.output):find("settling after loading", 1, true))
         h:advance(1); eq(replies(h), 0)
         h:add(3, 3600); h:change(); h:advance(1); eq(replies(h), 1)
     end)
