@@ -7,6 +7,7 @@ Friendly automatic thank-you whispers and targeted built-in emotes, plus custom 
 
 - Thanks players for newly applied or refreshed helpful buffs whose reported duration is **strictly greater than five minutes (300 seconds)**. Three-minute Battle Shout and buffs lasting exactly five minutes are ignored.
 - Uses 28 varied thank-you messages and avoids repeating the same reply twice in a row.
+- Supports your own random whisper list in a separate **Edit replies** window. Paste one reply per line; use shared lists or a different list for each character.
 - Supports custom whispers with `{name}` for the buff caster's character name and `%s` for the buff name.
 - Can save a different custom whisper for each character, or use one shared message. Existing shared messages remain the default.
 - Sends a private whisper by default, or a targeted emote without requiring the buff caster to be selected.
@@ -49,6 +50,28 @@ To give an alt its own roleplay message, check that option in `/ft gui`, type th
 Switching the checkbox displays the saved text for that scope without deleting the other scope's text. A new character-specific slot starts blank. Saving a blank whisper uses rotating replies; saving a blank custom emote uses built-in Thank or random animations. **Reset defaults** clears only the selected scope's reply text.
 
 Only the custom reply text and its scope choice are character-specific. Modes, cooldowns, reply delays, and the other settings remain shared.
+
+### Make your own whisper reply list
+
+1. Open `/ft gui` and select **Whisper**.
+2. Choose shared text or check **Use character-specific reply text** for this character only.
+3. Click **Edit replies** next to the reply summary.
+4. Enter one reply per line, or paste your whole list. `{name}` inserts the caster and `%s` inserts the buff.
+5. Click **Save**. The summary shows **Custom list** and the number of replies.
+
+For example:
+
+```text
+Cheers, {name}! Appreciate the %s.
+{name}, you're a legend. Thanks!
+That buff will come in handy. Much appreciated!
+```
+
+Whispers choose randomly from the saved list without repeating the previous reply when there is more than one. You can save up to 100 different replies, each up to 200 bytes before inserting names. Blank lines and identical duplicate lines are ignored. Invalid lines are identified before saving; your previous list stays intact until the new list is valid and saved.
+
+**Cancel**, the X button, or Escape discards unsaved edits. **Restore defaults**, or saving an empty list, restores the 28 built-in whispers for the selected scope. Saving the main **Custom whisper** field switches back to a single reply without deleting your saved list; reopen **Edit replies** and save to reactivate it. **Reset defaults** clears the selected scope's saved list too.
+
+Whisper lists are automatic and do not affect emotes. The same delay, cooldown, buff-duration requirement, and group filters still apply.
 
 ### Write a custom emote
 

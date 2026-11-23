@@ -390,6 +390,82 @@ test("invalid character settings are normalized and custom message validation is
     end
     eq(shared.message, "Shared thanks!")
 end)
+test("saved whisper lists send one automatic realm-qualified whisper with placeholders and no repeat", function()
+    local h = active({useWhisperList = true, whisperReplies = {"Cheers {name} for %s!", "Thanks {name}!"}, message = "Inactive single reply"})
+    for i = 1, 12 do
+        h:add(i, 3600, "Player-Paladin", "Blessing of Wisdom"); h:change(); h:advance(1)
+        eq(#h.sent, i); eq(h.sent[i].channel, "WHISPER"); eq(h.sent[i].recipient, "Paladin-Realm")
+        assert(h.sent[i].text == "Cheers Paladin for Blessing of Wisdom!" or h.sent[i].text == "Thanks Paladin!")
+        if i > 1 then assert(h.sent[i].text ~= h.sent[i-1].text) end
+        h:advance(61)
+    end
+    eq(#h.emotes, 0); eq(h.draft, nil)
+end)
+
+test("whisper lists trim and deduplicate saved replies and support a one-entry list", function()
+    local saved = {useWhisperList = true, whisperReplies = {"  Thanks {name}!  ", "Thanks {name}!", "Cheers!"}}
+    local h = active(saved)
+    eq(#saved.whisperReplies, 2); eq(saved.whisperReplies[1], "Thanks {name}!")
+    h = active({useWhisperList = true, whisperReplies = {"Thanks for %s, {name}. 100% appreciated."}})
+    h:add(1, 3600, nil, "Power 100%"); h:change(); h:advance(1)
+    eq(h.sent[1].text, "Thanks for Power 100%, BuffFriend. 100% appreciated.")
+    h:advance(61); h:add(2, 3600); h:change(); h:advance(1); eq(#h.sent, 2)
+end)
+
+test("whisper lists persist through reload and shared and character lists stay independent", function()
+    local shared = {useWhisperList = true, whisperReplies = {"Shared {name}!"}, message = "Old shared single"}
+    local mage = {useCharacterMessage = true, useWhisperList = true, whisperReplies = {"My arcane thanks, {name}!"}}
+    local h = active(shared, mage)
+    h:add(1, 3600); h:change(); h:advance(1); eq(h.sent[1].text, "My arcane thanks, BuffFriend!")
+    h = active(shared, mage)
+    h:add(1, 3600); h:change(); h:advance(1); eq(h.sent[1].text, "My arcane thanks, BuffFriend!")
+    h:cmd("messagescope global"); h:advance(61); h:add(2, 3600); h:change(); h:advance(1)
+    eq(h.sent[2].text, "Shared BuffFriend!")
+    eq(mage.whisperReplies[1], "My arcane thanks, {name}!"); eq(shared.message, "Old shared single")
+    h = active(shared, {})
+    h:add(1, 3600); h:change(); h:advance(1); eq(h.sent[1].text, "Shared BuffFriend!")
+end)
+
+test("single-message commands deactivate a list without deleting it and random restores defaults", function()
+    local shared = {useWhisperList = true, whisperReplies = {"Saved list reply"}}
+    local h = active(shared)
+    h:cmd("message One reply, {name}!")
+    eq(shared.useWhisperList, false); eq(shared.whisperReplies[1], "Saved list reply")
+    h:add(1, 3600); h:change(); h:advance(1); eq(h.sent[1].text, "One reply, BuffFriend!")
+    h:cmd("message random"); eq(shared.useWhisperList, false); eq(shared.message, nil)
+    h:advance(61); h:add(2, 3600); h:change(); h:advance(1)
+    assert(h.sent[2].text ~= "Saved list reply")
+end)
+
+test("invalid saved whisper lists fail safely without replacing existing single messages", function()
+    for _, invalid in ipairs({"bad", {}, {42}, {"bad|text"}, {string.rep("x", 201)}, {"bad\ntext"}, {[1]="good", [3]="gap", [4]="last"}}) do
+        local saved = {useWhisperList = true, whisperReplies = invalid, message = "Safe fallback"}
+        local h = active(saved)
+        h:add(1, 3600); h:change(); h:advance(1)
+        eq(h.sent[1].text, "Safe fallback")
+        eq(saved.message, "Safe fallback")
+    end
+end)
+
+test("whisper lists preserve disable, group filters, cooldown, and expanded-length protection", function()
+    local h = active({useWhisperList = true, whisperReplies = {"Thanks {name}!"}, skipGroupWhispers = true})
+    h.party = "Player-BuffFriend"; h:add(1, 3600); h:change(); h:advance(1); eq(#h.sent, 0)
+    h.party = nil; h:add(2, 3600); h:change(); h:advance(1); eq(#h.sent, 1)
+    h:add(3, 3600); h:change(); h:advance(1); eq(#h.sent, 1)
+    h:cmd("off"); h:add(4, 3600, "Player-Other"); h:change(); h:advance(1); eq(#h.sent, 1)
+    h = active({useWhisperList = true, whisperReplies = {string.rep("%s", 100)}})
+    h:add(1, 3600); h:change(); h:advance(1); eq(#h.chatRequests, 0)
+end)
+
+test("whisper lists never change built-in or custom emote replies", function()
+    local saved = {channel = "EMOTE", useWhisperList = true, whisperReplies = {"Whisper only"}}
+    local h = active(saved); h:add(1, 3600); h:change(); h:advance(1)
+    eq(#h.sent, 0); eq(#h.emotes, 1); eq(h.emotes[1].token, "THANK")
+    saved.emoteText = "thanks {name}!"
+    h = active(saved); h:add(1, 3600); h:change(); h:advance(1)
+    eq(#h.sent, 0); h:prepare(); eq(h.draft, "/em thanks BuffFriend!")
+end)
+
 test("new installations default to a five-second reply delay", function()
     local h = harness({__defaultDelay = true}); eq(h.env.ForeverThanksDB.delay, 5)
 end)

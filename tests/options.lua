@@ -15,7 +15,7 @@ return function(addon)
             local f = {scripts = {}, text = "", kind = kind}
             local function noop() end
             setmetatable(f, {__index = function(_, key)
-                if key:find("^Set") or key:find("^Register") then return noop end
+                if key:find("^Set") or key:find("^Register") or key == "EnableMouse" then return noop end
             end})
             function f:SetScript(event, fn) self.scripts[event] = fn end
             function f:Fire(event)
@@ -34,13 +34,21 @@ return function(addon)
             function f:SetChecked(value) self.checked = value end
             function f:GetChecked() return self.checked end
             function f:ClearFocus() self:Fire("OnEditFocusLost") end
-            function f:Show() self:Fire("OnShow") end
-            function f:Hide() self:Fire("OnHide") end
+            function f:Show() self.shown = true; self:Fire("OnShow") end
+            function f:Hide() self.shown = false; self:Fire("OnHide") end
+            function f:SetHeight(height) self.height = height end
+            function f:GetHeight() return self.height end
+            function f:GetVerticalScroll() return self.scrollOffset or 0 end
+            function f:SetVerticalScroll(value) self.scrollOffset = value end
+            function f:UpdateScrollChildRect() self.updated = true end
+            function f:HighlightText(first, last) self.highlight = {first, last} end
+            function f:SetFocus() self.focus = true end
             function f:CreateFontString() return widget("FontString") end
             function f:CreateTexture() return widget("Texture") end
             widgets[#widgets + 1] = f
             if kind == "Frame" and not root then root = f end
             if name == "ForeverThanksOptions" or name == "OctoThanksOptions" then options = f end
+            if name then env[name] = f end
             return f
         end
         env.CreateFrame = widget
@@ -148,5 +156,89 @@ return function(addon)
         f.message:SetText(""); click("Save message"); eq(db.emoteText, nil)
         eq(db.message, "Shared greeting!")
     end
+    for _, legacy in ipairs({false, true}) do
+        local shared = {message = "Original whisper", emoteText = "Original emote"}
+        local character = {}
+        local env, open = harness(shared, legacy, character)
+        local f = open()
+        eq(f.replySummary:GetText(), "Replies: Single message")
+        f.editReplies:Fire("OnClick")
+        local editor = env.ForeverThanksWhisperReplies
+        eq(editor.edit:GetText(), "Original whisper")
+        assert(editor.shown)
+        editor.edit:SetText("  Cheers {name}!  \r\n\nThanks for %s!\nCheers {name}!\n")
+        editor.save:Fire("OnClick")
+        eq(shared.useWhisperList, true); eq(#shared.whisperReplies, 2)
+        eq(shared.whisperReplies[1], "Cheers {name}!"); eq(shared.whisperReplies[2], "Thanks for %s!")
+        eq(shared.message, "Original whisper"); eq(shared.emoteText, "Original emote")
+        eq(f.replySummary:GetText(), "Replies: Custom list (2)")
+        eq(editor.shown, false)
+        local reloaded, reopen = harness(shared, legacy, character)
+        eq(reopen().replySummary:GetText(), "Replies: Custom list (2)")
+        eq(reloaded[savedName].useWhisperList, true)
+        f.editReplies:Fire("OnClick")
+        editor.edit:SetText("Unsaved change"); editor.cancel:Fire("OnClick")
+        eq(shared.whisperReplies[1], "Cheers {name}!")
+        f.editReplies:Fire("OnClick")
+        for _, invalid in ipairs({"Good line\nbad|text", "Good line\n" .. string.rep("x", 201), "bad\tcontrol"}) do
+            editor.edit:SetText(invalid); editor.save:Fire("OnClick")
+            assert(editor.shown and editor.edit.highlight)
+            eq(shared.whisperReplies[1], "Cheers {name}!")
+            assert(editor.validation:GetText():find("Line", 1, true))
+        end
+        local many = {}
+        for i = 1, 101 do many[i] = "Reply " .. i end
+        editor.edit:SetText(table.concat(many, "\n")); editor.save:Fire("OnClick")
+        assert(editor.validation:GetText():find("100", 1, true))
+        eq(#shared.whisperReplies, 2)
+        editor.edit:SetText(string.rep("x", 50001)); editor.save:Fire("OnClick")
+        assert(editor.validation:GetText():find("Too much text", 1, true))
+        eq(#shared.whisperReplies, 2)
+        -- A separate character list never overwrites the shared list or either emote.
+        f.characterMessage:SetChecked(true); f.characterMessage:Fire("OnClick")
+        eq(editor.shown, false)
+        f.editReplies:Fire("OnClick")
+        editor.edit:SetText("My character's thanks, {name}!\nMy second reply")
+        editor.save:Fire("OnClick")
+        eq(character.useWhisperList, true); eq(#character.whisperReplies, 2)
+        eq(#shared.whisperReplies, 2)
+        f.editReplies:Fire("OnClick")
+        editor.edit:SetText("Unsaved replacement"); f:Hide()
+        eq(editor.shown, false); eq(character.whisperReplies[2], "My second reply")
+        open(); f.editReplies:Fire("OnClick")
+        -- Slash scope changes during editing cannot redirect a save to another scope.
+        env.SlashCmdList.FOREVERTHANKS("messagescope global")
+        editor.edit:SetText("Must not overwrite shared replies"); editor.save:Fire("OnClick")
+        eq(shared.whisperReplies[1], "Cheers {name}!"); eq(editor.shown, false)
+        open(); f.editReplies:Fire("OnClick")
+        editor.restore:Fire("OnClick")
+        eq(shared.whisperReplies, nil); eq(shared.useWhisperList, false); eq(shared.message, nil)
+        eq(shared.emoteText, "Original emote"); eq(#character.whisperReplies, 2)
+        eq(f.replySummary:GetText(), "Replies: Built-in (28)")
+        f.editReplies:Fire("OnClick")
+        assert(editor.edit:GetText():find("Ayyy", 1, true))
+        -- Blank Save also restores defaults, while Escape discards edits.
+        editor.edit:SetText("Only one"); editor.save:Fire("OnClick")
+        eq(#shared.whisperReplies, 1)
+        f.editReplies:Fire("OnClick")
+        editor.edit:SetText("  \n\n"); editor.save:Fire("OnClick")
+        eq(shared.whisperReplies, nil); eq(f.replySummary:GetText(), "Replies: Built-in (28)")
+        f.editReplies:Fire("OnClick")
+        editor.edit:SetText("Don't save this"); editor.edit:Fire("OnEscapePressed")
+        eq(editor.shown, false); eq(shared.whisperReplies, nil)
+        -- Existing single-message controls deactivate but preserve a saved list.
+        f.editReplies:Fire("OnClick")
+        editor.edit:SetText("Keep this list"); editor.save:Fire("OnClick")
+        env.SlashCmdList.FOREVERTHANKS("message My single reply")
+        eq(shared.useWhisperList, false); eq(shared.whisperReplies[1], "Keep this list")
+        open(); eq(f.replySummary:GetText(), "Replies: Single message")
+        -- Cursor movement keeps the current line in view.
+        f.editReplies:Fire("OnClick")
+        editor.edit.scripts.OnCursorChanged(editor.edit, 0, -400, 5, 14)
+        assert(editor.scroll:GetVerticalScroll() > 0)
+        editor.edit.scripts.OnCursorChanged(editor.edit, 0, 0, 5, 14)
+        eq(editor.scroll:GetVerticalScroll(), 0)
+    end
+    print("PASS " .. addon .. " whisper list editor: save, cancel, validation, scopes, defaults, and scrolling")
     print("PASS " .. addon .. " GUI autosave, validation, reset, and saved-settings reload (modern/legacy callbacks)")
 end

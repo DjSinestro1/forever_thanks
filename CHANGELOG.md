@@ -1,3 +1,13 @@
+# 0.1.0.21
+
+- Adds a compact whisper-reply summary and Edit replies button in Whisper mode.
+- Opens a separate list editor: paste one reply per line, using `{name}` for the caster and `%s` for the buff.
+- Randomly chooses from your saved list without repeating the previous reply when multiple replies are available.
+- Supports independent shared and character-specific lists, saved across reloads and logouts.
+- Allows up to 100 different replies, each up to 200 bytes before inserting names. Ignores blank/duplicate lines and highlights invalid lines without replacing the saved list.
+- Includes Save, Cancel, and Restore defaults. Saving the existing single-message field deactivates the list without deleting it.
+- Keeps whisper lists separate from emotes and preserves existing timing, cooldowns, group filters, and buff requirements.
+
 # 0.1.0.20
 
 - Stops automatically sending custom text emotes, which could cause the game's "Interface action failed because of an AddOn" error.

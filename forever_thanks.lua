@@ -1,5 +1,5 @@
 local addonName = ...
-local VERSION = "0.1.0.20"
+local VERSION = "0.1.0.21"
 local LOAD_SETTLE_SECONDS, AURA_QUIET_SECONDS, MAX_APPLICATION_AGE = 5, 1, 5
 local DEFAULT_DELAY = 5
 local MIN_COOLDOWN, MAX_COOLDOWN = 10, 3600
@@ -145,6 +145,62 @@ local function ExpandText(text, spell, casterName)
     return (text:gsub("%%s", function() return spell end))
 end
 
+local function ParseWhisperReplies(text)
+    local replies, unique, lineNumber = {}, {}, 0
+    if #text > 50000 then return nil, "Too much text. Use up to 100 replies, 200 bytes each.", 0, #text end
+    for start, raw in (text .. "\n"):gmatch("()([^\n]*)\n") do
+        lineNumber = lineNumber + 1
+        local line = Trim(raw)
+        if line ~= "" then
+            local problem
+            if #line > 200 then problem = "reply is longer than 200 bytes."
+            elseif line:find("[%c|]") then problem = "remove control characters or |."
+            elseif not unique[line] and #replies >= 100 then problem = "use no more than 100 different replies." end
+            if problem then return nil, "Line " .. lineNumber .. ": " .. problem, start - 1, start - 1 + #raw end
+            if not unique[line] then replies[#replies + 1] = line; unique[line] = true end
+        end
+    end
+    return replies
+end
+
+local function NormalizeWhisperReplies(settings)
+    local list = settings.whisperReplies
+    if type(list) ~= "table" or #list == 0 or #list > 100 then list = nil end
+    if list then
+        local count = 0
+        for key, text in pairs(list) do
+            if type(key) ~= "number" or key < 1 or key > #list or key % 1 ~= 0
+                or type(text) ~= "string" or #text > 200 or text:find("[%c|]") then list = nil; break end
+            count = count + 1
+        end
+        if list and count ~= #list then list = nil end
+    end
+    local normalized = list and ParseWhisperReplies(table.concat(list, "\n"))
+    settings.whisperReplies = normalized and #normalized > 0 and normalized or nil
+    settings.useWhisperList = settings.useWhisperList == true and settings.whisperReplies ~= nil
+end
+
+local function SaveWhisperMessage(text)
+    text = Trim(text)
+    if text == "" or text:lower() == "random" or text:lower() == "default" then text = nil
+    elseif #text > 200 or text:find("[%c|]") then
+        Say("Message must be 1-200 bytes and contain no control characters or |.")
+        return false
+    end
+    local settings = MessageSettings()
+    settings.message, settings.useWhisperList = text, false
+    CancelPending()
+    Say(text and "Custom whisper saved. The saved reply list is inactive until saved in Edit replies."
+        or "28 built-in rotating whispers enabled for the selected scope.")
+    return true
+end
+
+local function WhisperReplySummary()
+    local settings = MessageSettings()
+    if settings.useWhisperList then return "Replies: Custom list (" .. #settings.whisperReplies .. ")" end
+    return settings.message and "Replies: Single message" or "Replies: Built-in (28)"
+end
+
 local function NormalizeEmoteText(text)
     if type(text) ~= "string" then return nil, false end
     text = Trim(text)
@@ -173,14 +229,20 @@ local function SaveEmoteText(text)
 end
 
 local function Message(spell, casterName)
-    local custom = MessageSettings().message
-    if custom then
-        return ExpandText(custom, spell, casterName)
+    local settings = MessageSettings()
+    local pool = settings.useWhisperList and settings.whisperReplies or messages
+    if not settings.useWhisperList and settings.message then
+        lastMessage = settings.message
+        return ExpandText(settings.message, spell, casterName)
     end
-    local index = math.random(#messages - (lastMessage and 1 or 0))
-    if lastMessage and index >= lastMessage then index = index + 1 end
-    lastMessage = index
-    return messages[index]
+    local previous
+    if #pool > 1 then
+        for i, text in ipairs(pool) do if text == lastMessage then previous = i; break end end
+    end
+    local index = math.random(#pool - (previous and 1 or 0))
+    if previous and index >= previous then index = index + 1 end
+    lastMessage = pool[index]
+    return ExpandText(lastMessage, spell, casterName)
 end
 
 local function ChooseEmote()
@@ -557,6 +619,7 @@ frame:SetScript("OnEvent", function(_, event, arg)
         charDB = ForeverThanksCharDB
         if type(charDB.useCharacterMessage) ~= "boolean" then charDB.useCharacterMessage = false end
         if type(charDB.message) ~= "string" or charDB.message == "" or #charDB.message > 200 then charDB.message = nil end
+        NormalizeWhisperReplies(charDB)
         charDB.emoteText = NormalizeEmoteText(charDB.emoteText)
         if type(db.enabled) ~= "boolean" then db.enabled = true end
         -- Whisper is the default; preserve only an explicitly selected emote mode.
@@ -574,6 +637,7 @@ frame:SetScript("OnEvent", function(_, event, arg)
         if type(db.cooldown) ~= "number" or db.cooldown ~= db.cooldown then db.cooldown = 60 end
         db.cooldown = math.max(MIN_COOLDOWN, math.min(MAX_COOLDOWN, db.cooldown))
         if type(db.message) ~= "string" or db.message == "" or #db.message > 200 then db.message = nil end
+        NormalizeWhisperReplies(db)
         if not Available() then Say("Required Forever APIs are missing; automatic thanks is inactive.") end
         Say(VERSION .. " loaded. /ft status or /ft help.")
     elseif event == "PLAYER_ENTERING_WORLD" then
@@ -668,11 +732,7 @@ SlashCmdList.FOREVERTHANKS = function(input)
     elseif cmd == "emotetext" then
         SaveEmoteText(rest)
     elseif cmd == "message" then
-        local settings = MessageSettings()
-        if rest == "random" or rest == "default" then settings.message = nil; Say("28 rotating messages enabled for the selected scope.")
-        elseif rest ~= "" and #rest <= 200 and not rest:find("[\r\n|]") then
-            settings.message = rest; Say("Custom message saved for " .. (charDB.useCharacterMessage and "this character" or "all shared-message characters") .. ". {name} inserts the caster name; %s inserts the buff name.")
-        else Say("Use /ft message <text, up to 200 bytes> or /ft message random.") end
+        SaveWhisperMessage(rest)
     elseif cmd == "preview" then
         local text
         if db.channel == "EMOTE" then
@@ -693,6 +753,7 @@ SlashCmdList.FOREVERTHANKS = function(input)
         Say("Channel: " .. db.channel:lower() .. ", delay " .. db.delay .. "s; message scope: " .. (charDB.useCharacterMessage and "character" or "global") .. ". This login: chat requests=" .. sent .. ", send errors=" .. failures .. ", restricted scans=" .. restricted .. ".")
         Say("Combat replies allowed when client data is readable; random animations wait up to 10s for movement. Minimap: " .. (db.showMinimap and "on" or "off") .. ".")
         Say("Custom emotes require Prepare emote, then Enter; pending=" .. #emoteDrafts .. ", prepared=" .. prepared .. " (not confirmed sent).")
+        Say(WhisperReplySummary())
         Say("After loading: 5s minimum, then 1s quiet. Applications older than 5s skipped. Last decision: " .. lastDecision .. ".")
     else
         Say("/ft on | off | status | preview | debug | gui")
@@ -705,7 +766,7 @@ SlashCmdList.FOREVERTHANKS = function(input)
     end
 end
 
-local optionsFrame
+local optionsFrame, whisperEditor
 local updatingOptions = false
 
 local function UpdateOptionsStatus()
@@ -775,7 +836,12 @@ local function RefreshOptions()
     optionsFrame.message:SetText(emoteMode and (MessageSettings().emoteText or "") or (MessageSettings().message or ""))
     optionsFrame.messageLabel:SetText((emoteMode and "Custom emote" or "Custom whisper") .. " (" .. (charDB.useCharacterMessage and "this character" or "shared") .. "): {name} = caster, %s = buff")
     optionsFrame.messageHint:SetText(emoteMode and "Custom: click Prepare, then Enter. Blank: automatic emotes."
-        or "Blank = rotating replies. Click Save message.")
+        or (MessageSettings().useWhisperList and "List active. Save message switches back to a single reply."
+            or "Blank = rotating replies. Click Save message."))
+    optionsFrame.replySummary:SetText(WhisperReplySummary())
+    if emoteMode then optionsFrame.replySummary:Hide(); optionsFrame.editReplies:Hide()
+    else optionsFrame.replySummary:Show(); optionsFrame.editReplies:Show() end
+    if whisperEditor and (emoteMode or whisperEditor.settings ~= MessageSettings()) then whisperEditor:Hide() end
     optionsFrame.modeText:SetText("Mode: " .. db.channel:lower())
     UpdateOptionsStatus()
     local ignored = SortedIgnoredBuffs()
@@ -817,6 +883,92 @@ local function BindOptionsNumber(edit, minimum, maximum, field, label)
         CommitOptionsNumber(self, minimum, maximum, field, label, true)
         self:ClearFocus()
     end)
+end
+
+local function OpenWhisperRepliesEditor()
+    if not whisperEditor then
+        local f = CreateFrame("Frame", "ForeverThanksWhisperReplies", optionsFrame)
+        whisperEditor = f
+        f:SetWidth(500); f:SetHeight(430)
+        f:SetPoint("CENTER", optionsFrame, "CENTER", 0, 0)
+        f:SetFrameStrata("FULLSCREEN_DIALOG")
+        f:EnableMouse(true)
+        local background = f:CreateTexture(nil, "BACKGROUND")
+        background:SetAllPoints(f)
+        background:SetColorTexture(0.03, 0.03, 0.03, 1)
+        f.title = OptionsLabel(f, "", 20, -20, 420)
+        local hint = OptionsLabel(f, "One whisper per line. {name} = caster; %s = buff.\nUp to 100 replies, 200 bytes per reply.", 20, -48, 450)
+        hint:SetHeight(36)
+        local scroll = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
+        scroll:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -96)
+        scroll:SetWidth(438); scroll:SetHeight(230)
+        local inputBackground = f:CreateTexture(nil, "BACKGROUND")
+        inputBackground:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -96)
+        inputBackground:SetWidth(438); inputBackground:SetHeight(230)
+        inputBackground:SetColorTexture(0.12, 0.12, 0.12, 1)
+        f.edit = CreateFrame("EditBox", nil, scroll)
+        f.edit:SetMultiLine(true)
+        f.edit:SetAutoFocus(false)
+        f.edit:SetFontObject("GameFontHighlight")
+        f.edit:SetWidth(426); f.edit:SetHeight(230)
+        f.edit:SetTextInsets(6, 6, 6, 6)
+        f.edit:SetMaxLetters(0)
+        scroll:SetScrollChild(f.edit)
+        f.scroll = scroll
+        f.validation = OptionsLabel(f, "", 20, -342, 450)
+        f.validation:SetHeight(36)
+        f.edit:SetScript("OnTextChanged", function()
+            local list, problem = ParseWhisperReplies(f.edit:GetText())
+            f.validation:SetText(problem or (#list .. " replies. Blank and duplicate lines are ignored."))
+            f.validation:SetTextColor(problem and 1 or 0.4, problem and 0.3 or 1, problem and 0.3 or 0.4)
+            scroll:UpdateScrollChildRect()
+        end)
+        f.edit:SetScript("OnCursorChanged", function(_, x, y, width, height)
+            if not y then return end
+            local offset = scroll:GetVerticalScroll()
+            local top, bottom = -y, -y + height + 12
+            if bottom > offset + scroll:GetHeight() then
+                scroll:SetVerticalScroll(bottom - scroll:GetHeight())
+            elseif top < offset then scroll:SetVerticalScroll(math.max(0, top)) end
+        end)
+        f.edit:SetScript("OnEscapePressed", function() f:Hide() end)
+        local function Save(list)
+            if f.settings ~= MessageSettings() or db.channel ~= "WHISPER" then
+                Say("Whisper mode or reply scope changed. Reopen Edit replies."); f:Hide(); return
+            end
+            local settings = f.settings
+            settings.whisperReplies = #list > 0 and list or nil
+            settings.useWhisperList = #list > 0
+            if #list == 0 then settings.message = nil end
+            CancelPending()
+            f:Hide()
+            RefreshOptions()
+            Say(#list > 0 and (#list .. " custom whispers saved. A random reply is used for each qualifying buff.")
+                or "Built-in rotating whispers restored for the selected scope.")
+        end
+        f.save = OptionsButton(f, "Save", 20, -390, 90, 26, function()
+            local list, problem, first, last = ParseWhisperReplies(f.edit:GetText())
+            if not list then
+                f.validation:SetText(problem)
+                f.edit:SetFocus()
+                f.edit:HighlightText(first, last)
+                return
+            end
+            Save(list)
+        end)
+        f.cancel = OptionsButton(f, "Cancel", 390, -390, 90, 26, function() f:Hide() end)
+        f.restore = OptionsButton(f, "Restore defaults", 125, -390, 150, 26, function() Save({}) end)
+        OptionsButton(f, "X", 452, -16, 28, 24, function() f:Hide() end)
+        f:SetScript("OnHide", function() f.edit:ClearFocus() end)
+    end
+    local settings = MessageSettings()
+    whisperEditor.settings = settings
+    whisperEditor.title:SetText("Whisper replies - " .. (charDB.useCharacterMessage and "this character" or "shared"))
+    local initial = settings.whisperReplies or (settings.message and {settings.message}) or messages
+    whisperEditor.edit:SetText(table.concat(initial, "\n"))
+    whisperEditor.edit:SetCursorPosition(0)
+    whisperEditor.scroll:SetVerticalScroll(0)
+    whisperEditor:Show()
 end
 
 local function CreateOptions()
@@ -905,47 +1057,42 @@ local function CreateOptions()
     f.message = OptionsEdit(f, 20, -362, 350, 24)
     OptionsButton(f, "Save message", 380, -362, 105, 24, function()
         if db.channel == "EMOTE" then SaveEmoteText(f.message:GetText()); RefreshOptions(); return end
-        local settings = MessageSettings()
-        local text = Trim(f.message:GetText())
-        if text == "" or text:lower() == "random" or text:lower() == "default" then
-            settings.message = nil
-        elseif #text <= 200 and not text:find("[\r\n|]") then
-            settings.message = text
-        else
-            Say("Message must be 1-200 characters and contain no line breaks or |.")
-        end
+        SaveWhisperMessage(f.message:GetText())
         RefreshOptions()
     end)
     f.messageHint = OptionsLabel(f, "", 20, -391, 450)
+    f.replySummary = OptionsLabel(f, "", 20, -420, 340)
+    f.editReplies = OptionsButton(f, "Edit replies", 380, -412, 105, 24, OpenWhisperRepliesEditor)
 
-    OptionsLabel(f, "Ignored buffs (enter a spell name or spell ID)", 20, -406, 400)
-    f.ignoreInput = OptionsEdit(f, 20, -430, 230, 24)
-    OptionsButton(f, "Add", 260, -430, 65, 24, function()
+    OptionsLabel(f, "Ignored buffs (enter a spell name or spell ID)", 20, -446, 400)
+    f.ignoreInput = OptionsEdit(f, 20, -470, 230, 24)
+    OptionsButton(f, "Add", 260, -470, 65, 24, function()
         local key, label = NormalizeIgnoredBuff(f.ignoreInput:GetText())
         if key then db.ignoredBuffs[key] = label; f.ignoreInput:SetText(""); CancelPending(); RefreshOptions()
         else Say("Enter a spell name or spell ID first.") end
     end)
-    OptionsButton(f, "Remove", 330, -430, 70, 24, function()
+    OptionsButton(f, "Remove", 330, -470, 70, 24, function()
         local key, label = NormalizeIgnoredBuff(f.ignoreInput:GetText())
         if key and db.ignoredBuffs[key] then db.ignoredBuffs[key] = nil; f.ignoreInput:SetText(""); CancelPending(); RefreshOptions()
         else Say("That buff is not in the ignore list.") end
     end)
-    OptionsButton(f, "Clear", 405, -430, 80, 24, function()
+    OptionsButton(f, "Clear", 405, -470, 80, 24, function()
         db.ignoredBuffs = {}
         CancelPending()
         RefreshOptions()
     end)
-    f.ignoreList = OptionsLabel(f, "", 20, -464, 465)
+    f.ignoreList = OptionsLabel(f, "", 20, -504, 465)
     f.ignoreList:SetHeight(55)
 
-    f.showMinimap = OptionsCheck(f, "Show minimap button", 20, -518, function(button)
+    f.showMinimap = OptionsCheck(f, "Show minimap button", 20, -558, function(button)
         button = button or this
         db.showMinimap = button:GetChecked() and true or false
         UpdateMinimapVisibility()
         RefreshOptions()
     end)
 
-    OptionsButton(f, "Reset defaults", 20, -552, 120, 26, function()
+    OptionsButton(f, "Reset defaults", 20, -592, 120, 26, function()
+        if whisperEditor then whisperEditor:Hide() end
         db.enabled = true
         db.channel = "WHISPER"
         db.groups = true
@@ -955,6 +1102,8 @@ local function CreateOptions()
         db.cooldown = 60
         MessageSettings().message = nil
         MessageSettings().emoteText = nil
+        MessageSettings().whisperReplies = nil
+        MessageSettings().useWhisperList = false
         db.ignoredBuffs = {}
         db.showMinimap = true
         UpdateMinimapVisibility()
@@ -962,9 +1111,10 @@ local function CreateOptions()
         Baseline()
         RefreshOptions()
     end)
-    OptionsButton(f, "Close", 385, -552, 100, 26, function() f:Hide() end)
+    OptionsButton(f, "Close", 385, -592, 100, 26, function() f:Hide() end)
     f:SetScript("OnShow", RefreshOptions)
     f:SetScript("OnHide", function()
+        if whisperEditor then whisperEditor:Hide() end
         CommitOptionsNumber(f.delay, 0, 60, "delay", "delay", true)
         CommitOptionsNumber(f.cooldown, MIN_COOLDOWN, MAX_COOLDOWN, "cooldown", "cooldown", true)
     end)
