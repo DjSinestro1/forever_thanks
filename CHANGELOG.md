@@ -1,3 +1,18 @@
+# 0.1.0.23
+
+- Clicking the minimap icon now toggles the options window: click once to open, again to close.
+- Works with both the standalone minimap icon and the icon inside Leatrix Plus's button bag.
+- Keeps `/ft gui` as an open-options command. Closing with the icon preserves saved settings and discards unsaved list-editor changes.
+
+# 0.1.0.22
+
+- Fixes compatibility with Leatrix Plus's square minimap and minimap button bag.
+- Registers the heart icon with the shared LibDBIcon/LibDataBroker libraries when available, allowing minimap managers to collect and place it normally.
+- Keeps collected icons in their bag when zoning instead of forcing them back onto the minimap.
+- Preserves the existing icon position and Show minimap button setting, including icons hidden before upgrading.
+- Supports round and square minimap edges and resizing when using the standalone button without shared libraries.
+- Handles libraries loaded before or after Forever Thanks without showing duplicate icons. No extra library installation is required.
+
 # 0.1.0.21
 
 - Adds a compact whisper-reply summary and Edit replies button in Whisper mode.

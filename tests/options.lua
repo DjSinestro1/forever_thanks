@@ -36,6 +36,7 @@ return function(addon)
             function f:ClearFocus() self:Fire("OnEditFocusLost") end
             function f:Show() self.shown = true; self:Fire("OnShow") end
             function f:Hide() self.shown = false; self:Fire("OnHide") end
+            function f:IsShown() return self.shown == true end
             function f:SetHeight(height) self.height = height end
             function f:GetHeight() return self.height end
             function f:GetVerticalScroll() return self.scrollOffset or 0 end
@@ -62,6 +63,9 @@ return function(addon)
     for _, legacy in ipairs({false, true}) do
         local env, open, widgets = harness(nil, legacy)
         local f, db = open(), env[savedName]
+        env[openName](true); eq(f:IsShown(), false)
+        env[openName](true); eq(f:IsShown(), true)
+        env[openName](); eq(f:IsShown(), true)
         eq(db.delay, 5); eq(db.cooldown, 60)
         -- Typing 10 must save without Enter and survive closing and reloading.
         f.cooldown:SetText("1"); eq(db.cooldown, 60)
@@ -203,7 +207,8 @@ return function(addon)
         eq(character.useWhisperList, true); eq(#character.whisperReplies, 2)
         eq(#shared.whisperReplies, 2)
         f.editReplies:Fire("OnClick")
-        editor.edit:SetText("Unsaved replacement"); f:Hide()
+        editor.edit:SetText("Unsaved replacement"); env[openName](true)
+        eq(f:IsShown(), false)
         eq(editor.shown, false); eq(character.whisperReplies[2], "My second reply")
         open(); f.editReplies:Fire("OnClick")
         -- Slash scope changes during editing cannot redirect a save to another scope.

@@ -2,9 +2,10 @@
 ## Title: forever_thanks
 ## Notes: Automatic thank-you whispers or targeted emotes for long buffs. WoW Forever.
 ## Author: Sinestro
-## Version: 0.1.0.21
+## Version: 0.1.0.23
 ## IconTexture: Interface\AddOns\forever_thanks\minimap.tga
 ## SavedVariables: ForeverThanksDB
 ## SavedVariablesPerCharacter: ForeverThanksCharDB
+## OptionalDeps: Leatrix_Plus
 
 forever_thanks.lua

@@ -1,5 +1,5 @@
 local addonName = ...
-local VERSION = "0.1.0.21"
+local VERSION = "0.1.0.23"
 local LOAD_SETTLE_SECONDS, AURA_QUIET_SECONDS, MAX_APPLICATION_AGE = 5, 1, 5
 local DEFAULT_DELAY = 5
 local MIN_COOLDOWN, MAX_COOLDOWN = 10, 3600
@@ -44,7 +44,7 @@ local generation, lastMessage, lastAttempt = 0, nil, -math.huge
 local lastEmote
 local sent, failures, restricted = 0, 0, 0
 local inWorld, settling, worldGeneration, lastAuraUpdate = false, true, 0, 0
-local minimapButton
+local minimapButton, minimapLibrary, minimapLauncher, minimapVisible, positionMinimap
 local lastDecision = "No reply considered yet"
 
 local function Say(text)
@@ -544,11 +544,50 @@ local function EnterWorld()
     end
 end
 
+local function MinimapTooltip(tooltip)
+    tooltip:SetText("Forever Thanks")
+    tooltip:AddLine("Click to open or close options.", 1, 1, 1)
+    tooltip:AddLine("Drag to move around the minimap.", 1, 1, 1)
+end
+
+local function ToggleMinimapOptions()
+    if OpenForeverThanksOptions then OpenForeverThanksOptions(true) end
+end
+
+local function RegisterSharedMinimapButton()
+    if minimapLibrary then return true end
+    if not LibStub or not Minimap then return false end
+    local library = LibStub("LibDBIcon-1.0", true)
+    local broker = LibStub("LibDataBroker-1.1", true)
+    if not library or not broker then return false end
+    local ok, button = pcall(function()
+        local existing = library:GetMinimapButton("forever_thanks")
+        if existing then return existing end
+        minimapLauncher = minimapLauncher or broker:NewDataObject("forever_thanks", {
+            type = "launcher", label = "Forever Thanks",
+            icon = "Interface\\AddOns\\forever_thanks\\minimap.tga",
+            OnClick = ToggleMinimapOptions, OnTooltipShow = MinimapTooltip,
+        })
+        -- Registration notifies button bags through LibDBIcon_IconCreated.
+        library:Register("forever_thanks", minimapLauncher, db.minimap)
+        return library:GetMinimapButton("forever_thanks")
+    end)
+    if not ok or not button then return false end
+    if minimapButton and minimapButton ~= button then
+        minimapButton:SetScript("OnUpdate", nil)
+        minimapButton:Hide()
+    end
+    minimapButton, minimapLibrary, positionMinimap = button, library, nil
+    minimapVisible = db.showMinimap
+    return true
+end
+
 local function CreateMinimapButton()
     if not db or not db.showMinimap then return end
     local minimap = Minimap or MinimapCluster
     if minimapButton or not minimap then return end
     minimapButton = CreateFrame("Button", "ForeverThanksMinimapButton", minimap)
+    local button = minimapButton
     minimapButton:SetWidth(32)
     minimapButton:SetHeight(32)
     minimapButton:SetFrameStrata("MEDIUM")
@@ -561,57 +600,81 @@ local function CreateMinimapButton()
     icon:SetHeight(24)
     minimapButton:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
     local function Position()
-        local angle = db.minimapAngle
-        if type(angle) ~= "number" or angle ~= angle then angle = math.pi * 1.25 end
-        minimapButton:ClearAllPoints()
-        minimapButton:SetPoint("CENTER", minimap, "CENTER",
-            (minimap:GetWidth() / 2 + 8) * math.cos(angle),
-            (minimap:GetHeight() / 2 + 8) * math.sin(angle))
+        -- A retired or collected fallback must not move a manager's button.
+        if minimapButton ~= button or button:GetParent() ~= minimap then return end
+        local angle = db.minimap.minimapPos * math.pi / 180
+        local x, y = math.cos(angle), math.sin(angle)
+        if GetMinimapShape and GetMinimapShape() == "SQUARE" then
+            local scale = math.max(math.abs(x), math.abs(y))
+            x, y = x / scale, y / scale
+        end
+        button:ClearAllPoints()
+        button:SetPoint("CENTER", minimap, "CENTER",
+            (minimap:GetWidth() / 2 + 8) * x, (minimap:GetHeight() / 2 + 8) * y)
     end
     minimapButton:RegisterForClicks("LeftButtonUp")
     minimapButton:RegisterForDrag("LeftButton")
     minimapButton:SetScript("OnDragStart", function()
+        if minimapButton ~= button or button:GetParent() ~= minimap then return end
         GameTooltip:Hide()
-        minimapButton:SetScript("OnUpdate", function()
+        button:SetScript("OnUpdate", function()
             local x, y = GetCursorPosition()
             local cx, cy = minimap:GetCenter()
             if not cx or not cy then return end
             local scale = minimap:GetEffectiveScale()
             db.minimapAngle = math.atan2(y / scale - cy, x / scale - cx)
+            db.minimap.minimapPos = (db.minimapAngle * 180 / math.pi) % 360
             Position()
         end)
     end)
     minimapButton:SetScript("OnDragStop", function()
-        minimapButton:SetScript("OnUpdate", nil)
+        button:SetScript("OnUpdate", nil)
     end)
-    minimapButton:SetScript("OnClick", function()
-        if OpenForeverThanksOptions then OpenForeverThanksOptions() end
-    end)
+    minimapButton:SetScript("OnClick", ToggleMinimapOptions)
     minimapButton:SetScript("OnEnter", function(button)
         GameTooltip:SetOwner(button or this, "ANCHOR_LEFT")
-        GameTooltip:SetText("Forever Thanks")
-        GameTooltip:AddLine("Click to open options.", 1, 1, 1)
-        GameTooltip:AddLine("Drag to move around the minimap.", 1, 1, 1)
+        MinimapTooltip(GameTooltip)
         GameTooltip:Show()
     end)
     minimapButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
     Position()
     minimapButton:Show()
+    minimapVisible, positionMinimap = true, Position
+    if minimap.HookScript then minimap:HookScript("OnSizeChanged", Position) end
+    if hooksecurefunc and minimap.SetMaskTexture then hooksecurefunc(minimap, "SetMaskTexture", Position) end
 end
 
 local function UpdateMinimapVisibility()
     if not db then return end
+    db.minimap.hide = not db.showMinimap
+    if RegisterSharedMinimapButton() then
+        if minimapVisible ~= db.showMinimap then
+            db.minimap.hide = not db.showMinimap
+            if db.minimap.hide then minimapLibrary:Hide("forever_thanks")
+            elseif minimapButton:GetParent() == Minimap then minimapLibrary:Show("forever_thanks")
+            else minimapButton:Show() end
+            minimapVisible = db.showMinimap
+        end
+        -- Never refresh or reposition a button just because the player zoned.
+        return
+    end
     if db.showMinimap then
         CreateMinimapButton()
-        if minimapButton then minimapButton:Show() end
+        if positionMinimap then positionMinimap() end
+        if minimapButton and minimapVisible ~= true then minimapButton:Show() end
     elseif minimapButton then
         minimapButton:SetScript("OnUpdate", nil)
         if GameTooltip then GameTooltip:Hide() end
         minimapButton:Hide()
     end
+    if minimapButton then minimapVisible = db.showMinimap end
 end
 
 frame:SetScript("OnEvent", function(_, event, arg)
+    if event == "ADDON_LOADED" and arg ~= addonName then
+        if db then UpdateMinimapVisibility() end
+        return
+    end
     if event == "ADDON_LOADED" and arg == addonName then
         if type(ForeverThanksDB) ~= "table" then ForeverThanksDB = {} end
         db = ForeverThanksDB
@@ -633,6 +696,15 @@ frame:SetScript("OnEvent", function(_, event, arg)
         db.delay = math.max(0, math.min(60, db.delay))
         if type(db.ignoredBuffs) ~= "table" then db.ignoredBuffs = {} end
         if type(db.showMinimap) ~= "boolean" then db.showMinimap = true end
+        if type(db.minimap) ~= "table" then db.minimap = {} end
+        local pos = db.minimap.minimapPos
+        if type(pos) ~= "number" or pos ~= pos or math.abs(pos) == math.huge then
+            local angle = db.minimapAngle
+            if type(angle) ~= "number" or angle ~= angle or math.abs(angle) == math.huge then angle = math.pi * 1.25 end
+            pos = angle * 180 / math.pi
+        end
+        db.minimap.minimapPos = pos % 360
+        db.minimap.hide = not db.showMinimap
         UpdateMinimapVisibility()
         if type(db.cooldown) ~= "number" or db.cooldown ~= db.cooldown then db.cooldown = 60 end
         db.cooldown = math.max(MIN_COOLDOWN, math.min(MAX_COOLDOWN, db.cooldown))
@@ -640,6 +712,8 @@ frame:SetScript("OnEvent", function(_, event, arg)
         NormalizeWhisperReplies(db)
         if not Available() then Say("Required Forever APIs are missing; automatic thanks is inactive.") end
         Say(VERSION .. " loaded. /ft status or /ft help.")
+    elseif event == "PLAYER_LOGIN" then
+        UpdateMinimapVisibility()
     elseif event == "PLAYER_ENTERING_WORLD" then
         UpdateMinimapVisibility()
         EnterWorld()
@@ -655,7 +729,7 @@ frame:SetScript("OnEvent", function(_, event, arg)
         Scan(false)
     end
 end)
-for _, event in ipairs({"ADDON_LOADED", "PLAYER_ENTERING_WORLD", "PLAYER_LEAVING_WORLD",
+for _, event in ipairs({"ADDON_LOADED", "PLAYER_LOGIN", "PLAYER_ENTERING_WORLD", "PLAYER_LEAVING_WORLD",
     "PLAYER_REGEN_ENABLED", "PLAYER_REGEN_DISABLED", "UNIT_AURA"}) do
     frame:RegisterEvent(event)
 end
@@ -1121,8 +1195,9 @@ local function CreateOptions()
     return f
 end
 
-OpenForeverThanksOptions = function()
+OpenForeverThanksOptions = function(toggle)
     if not db then return end
+    if toggle and optionsFrame and optionsFrame:IsShown() then optionsFrame:Hide(); return end
     if not optionsFrame then optionsFrame = CreateOptions() end
     RefreshOptions()
     optionsFrame:Show()

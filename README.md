@@ -39,7 +39,11 @@ Open the settings window with:
 
 You can also click the blue Thank You heart button on the minimap's outer edge (bottom-left by default). Drag the button around the minimap to reposition it; its position is saved. The options window controls enabling the addon, Whisper or Emote mode, reply delay, cooldown, group behavior, random emotes, custom messages, and ignored buffs. Settings are saved automatically. Valid delay and cooldown values save as you type; pressing Enter is not required.
 
+Click the minimap icon once to open options and again to close them, including when the icon is inside Leatrix Plus's button bag. `/ft gui` always opens options.
+
 Uncheck **Show minimap button** to hide the button. This choice is saved across reloads and logouts. You can always reopen settings with `/ft gui` and show it again.
+
+**Square minimaps and icon bags:** when Leatrix Plus or another addon provides the shared LibDBIcon/LibDataBroker libraries, Forever Thanks registers a standard icon so Leatrix's minimap button bag can collect it and control its placement. Your existing button position and visibility are preserved. Without those libraries, the standalone button follows round or square minimap edges and adjusts when the map is resized. No separate library download is required.
 
 ### Shared or character-specific reply text
 
